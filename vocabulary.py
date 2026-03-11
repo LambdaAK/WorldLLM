@@ -75,6 +75,11 @@ COMMON = [
     "Okay", "got",
 ]
 
+# Math: digits, operators, two-digit results (for addition/subtraction chains)
+DIGITS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+MATH_OPERATORS = ["+", "-"]
+MATH_RESULTS = [str(n) for n in range(10, 37)]  # "10" through "36"
+
 # Punctuation (handled as tokens)
 PUNCTUATION = [".", "?", "!", ","]
 
@@ -92,6 +97,9 @@ def _build_vocab() -> list[str]:
         PREPOSITIONS,
         CONNECTORS,
         COMMON,
+        DIGITS,
+        MATH_OPERATORS,
+        MATH_RESULTS,
         PUNCTUATION,
     ]
     seen = set()

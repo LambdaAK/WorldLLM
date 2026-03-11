@@ -7,8 +7,9 @@ ground-truth PossessionState so answers are always correct.
 
 Supports: simple possession ("Alice has the ball"), compound possession
 ("Alice has the ball and the key"), transfers ("Alice gives the ball to Bob"),
-multi-hop transfers, and five question types (who_has, what_has, yes_no,
-who_has_what, how_many).
+multi-hop transfers, five question types (who_has, what_has, yes_no,
+who_has_what, how_many), and mixed arithmetic (single-digit addition/subtraction
+chains, e.g. "What is 1 + 2 + 4?" -> "7.", "What is 3 - 7?" -> "- 4.").
 
 Usage:
     python data_generator.py --train 200000 --val 2000 --test 2000 --outdir data
@@ -259,6 +260,46 @@ def _add_question(state: PossessionState, turns: List[Tuple[str, str]],
     return True
 
 
+def _evaluate_math(nums: List[int], ops: List[str]) -> int:
+    """Evaluate expression left-to-right. nums[0] op[0] nums[1] op[1] nums[2] ..."""
+    result = nums[0]
+    for i, op in enumerate(ops):
+        if op == "+":
+            result += nums[i + 1]
+        else:
+            result -= nums[i + 1]
+    return result
+
+
+def _generate_math_turn() -> Tuple[str, str]:
+    """Generate a math question and answer. Single-digit operands, 2-4 operations, left-to-right."""
+    num_ops = random.randint(1, 4)  # 1 op = two numbers, 4 ops = five numbers
+    nums = [random.randint(0, 9) for _ in range(num_ops + 1)]
+    ops = [random.choice(["+", "-"]) for _ in range(num_ops)]
+
+    result = _evaluate_math(nums, ops)
+
+    parts = [str(nums[0])]
+    for i, op in enumerate(ops):
+        parts.append(op)
+        parts.append(str(nums[i + 1]))
+    expr = " ".join(parts)
+    question = f"What is {expr}?"
+
+    if result >= 0:
+        answer = f"{result}."
+    else:
+        answer = f"- {abs(result)}."
+
+    return (question, answer)
+
+
+def _add_math(turns: List[Tuple[str, str]]) -> bool:
+    """Add a math question turn. Always succeeds."""
+    turns.append(_generate_math_turn())
+    return True
+
+
 def generate_conversation_example() -> Optional[Tuple[List[Tuple[str, str]], PossessionState]]:
     """Generate a single randomized conversation.
 
@@ -294,20 +335,19 @@ def generate_conversation_example() -> Optional[Tuple[List[Tuple[str, str]], Pos
             assigned_objects.append(obj)
         turns.extend(_phrase_possession(person, objs))
 
-    # Phase 2: interleaved actions (questions, transfers, more possessions)
+    # Phase 2: interleaved actions (50% math, 20% questions, 20% transfers, 10% possessions)
     num_extra_actions = random.randint(0, 4)
     for _ in range(num_extra_actions):
         r = random.random()
-        if r < 0.45:
+        if r < 0.50:
+            _add_math(turns)
+        elif r < 0.70:
             _add_question(state, turns, people, assigned_objects)
-        elif r < 0.75 and num_people >= 2:
+        elif r < 0.90 and num_people >= 2:
             _add_transfer(state, turns, people)
-        elif r < 0.90:
+        else:
             new = _add_possession(state, turns, people, objects)
             assigned_objects.extend(new)
-        else:
-            if num_people >= 2:
-                _add_transfer(state, turns, people)
 
     # Phase 3: 80% chance of ending with a final question
     if random.random() < 0.8:
