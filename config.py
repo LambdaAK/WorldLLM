@@ -14,11 +14,11 @@ class ModelConfig:
     """Architecture hyperparameters for the decoder-only transformer."""
 
     vocab_size: int = 137          # set at runtime from vocabulary.VOCAB_SIZE
-    max_seq_len: int = 256         # absolute positional embedding table size
-    embed_dim: int = 256           # token + position embedding dimension
-    num_heads: int = 8             # must evenly divide embed_dim
-    num_layers: int = 8            # number of TransformerBlock layers
-    ffn_dim: int = 1024            # inner dimension of the two-layer FFN
+    max_seq_len: int = 384         # absolute positional embedding table size
+    embed_dim: int = 384           # token + position embedding dimension
+    num_heads: int = 12            # must evenly divide embed_dim
+    num_layers: int = 12           # number of TransformerBlock layers
+    ffn_dim: int = 1536            # inner dimension of the two-layer FFN
     dropout: float = 0.1
 
 

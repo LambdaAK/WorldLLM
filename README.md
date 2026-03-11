@@ -13,7 +13,7 @@ pip install torch>=2.0
 ### 2. Generate training data
 
 ```bash
-python data_generator.py --train 200000 --val 2000 --test 2000 --outdir data
+python data_generator.py --train 300000 --val 2000 --test 2000 --outdir data
 ```
 
 ### 3. Train
@@ -28,12 +28,12 @@ sudo ldconfig
 python train.py
 ```
 
-This trains indefinitely with all A100 optimizations enabled by default (FlashAttention, bfloat16, TF32, `torch.compile`). The model converges in ~5 epochs (~3 minutes). Ctrl+C to stop. Best checkpoint is saved to `checkpoints/best.pt`.
+Training runs indefinitely. Stop with Ctrl+C once val_loss has plateaued (typically ~15 epochs). Best checkpoint is saved to `checkpoints/best.pt`. A100 optimizations are enabled by default (FlashAttention, bfloat16, TF32, `torch.compile`).
 
-To customize:
+To customize batch size or learning rate:
 
 ```bash
-python train.py --epochs 10 --batch_size 512 --lr 1e-4
+python train.py --batch_size 512 --lr 1e-4
 ```
 
 ### 4. Chat with the model
@@ -45,7 +45,8 @@ python interact.py
 ### 5. Run tests
 
 ```bash
-python test_model.py
+python run_examples.py   # full 22-test suite
+python test_model.py     # quick smoke test
 ```
 
 ## Example conversation
@@ -91,9 +92,15 @@ none.
 ## Architecture
 
 - GPT-style decoder-only transformer
-- 8 layers, 256 embedding dim, 8 attention heads, 1024 FFN dim
-- ~6.4M parameters
+- 12 layers, 384 embedding dim, 12 attention heads, 1536 FFN dim, 384 max seq len
+- ~21.5M parameters
 - Weight-tied token embeddings and output head
+
+## Training
+
+- 300,000 training examples (generate with `data_generator.py` before training)
+- ~15 epochs to converge; stop with Ctrl+C when val_loss plateaus
+- Data paths: `data/train.txt`, `data/val.txt` (configurable via `--train_path`, `--val_path`)
 
 ## A100 Optimizations
 

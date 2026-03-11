@@ -110,12 +110,48 @@ class PossessionState:
                 result.append((p, objs))
         return result
 
+    def all_possessions_with_counts(self) -> List[Tuple[str, List[Tuple[str, int]]]]:
+        """(person, [(obj, count), ...]) for formatting with quantities."""
+        result = []
+        for p in sorted(self.quantities.keys()):
+            items = [(obj, c) for obj, c in self.quantities[p].items() if c >= 1]
+            if items:
+                result.append((p, sorted(items)))
+        return result
+
+
+def _format_possession_item(obj: str, count: int = 1) -> str:
+    """Format one object: 'the ball' (unique) or '1 apple' / '5 apples' (countable). No 'the' for countable."""
+    if obj in COUNTABLE_OBJECTS:
+        if count == 1:
+            return f"1 {obj}"
+        return f"{NUMBER_WORDS.get(count, str(count))} {OBJ_TO_PLURAL[obj]}"
+    return f"the {obj}"
+
 
 def _format_objects(objects: List[str]) -> str:
-    """['ball'] -> 'the ball', ['ball', 'key'] -> 'the ball and the key'"""
+    """['ball'] -> 'the ball', ['ball', 'apple'] -> 'the ball and 1 apple' (no 'the' for countable)."""
     if len(objects) == 1:
-        return f"the {objects[0]}"
-    return " and ".join(f"the {obj}" for obj in objects)
+        return _format_possession_item(objects[0])
+    return " and ".join(_format_possession_item(obj) for obj in objects)
+
+
+def _format_possessions_with_counts(items: List[Tuple[str, int]]) -> str:
+    """Format possessions: [(apple, 5), (ball, 1)] -> '5 apples and the ball' (no 'the' for countable)."""
+    parts = []
+    for obj, count in items:
+        if obj in COUNTABLE_OBJECTS:
+            if count == 1:
+                parts.append(f"1 {obj}")
+            else:
+                plural = OBJ_TO_PLURAL[obj]
+                word = NUMBER_WORDS.get(count, str(count))
+                parts.append(f"{word} {plural}")
+        else:
+            parts.append(f"the {obj}")
+    if len(parts) == 1:
+        return parts[0]
+    return " and ".join(parts)
 
 
 def format_conversation(turns: List[Tuple[str, str]]) -> str:
@@ -142,7 +178,7 @@ def _build_question(q_type: str, state: PossessionState,
     """Build a (question, answer) pair for the given type."""
 
     if q_type == "who_has":
-        held = [o for o in objects if state.who_has(o) is not None]
+        held = [o for o in objects if o in UNIQUE_OBJECTS and state.who_has(o) is not None]
         if not held:
             return None
         obj = random.choice(held)
@@ -151,27 +187,30 @@ def _build_question(q_type: str, state: PossessionState,
 
     if q_type == "what_has":
         person = random.choice(people)
-        things = state.what_does_have(person)
+        items = [
+            (obj, state.get_count(person, obj))
+            for obj in state.what_does_have(person)
+        ]
         q = f"What does {person} have?"
-        if things:
-            return (q, f"{_format_objects(things)}.")
+        if items:
+            return (q, f"{_format_possessions_with_counts(items)}.")
         return (q, "nothing.")
 
     if q_type == "yes_no":
         person = random.choice(people)
-        obj = random.choice(OBJECTS)
+        obj = random.choice(UNIQUE_OBJECTS)
         q = f"Does {person} have the {obj}?"
         if obj in state.what_does_have(person):
             return (q, "Yes.")
         return (q, "No.")
 
     if q_type == "who_has_what":
-        possessions = state.all_possessions()
+        possessions = state.all_possessions_with_counts()
         if not possessions:
             return None
         parts = []
-        for person, objs in possessions:
-            parts.append(f"{person} has {_format_objects(objs)}.")
+        for person, items in possessions:
+            parts.append(f"{person} has {_format_possessions_with_counts(items)}.")
         return ("Who has what?", " ".join(parts))
 
     if q_type == "how_many":
@@ -181,7 +220,7 @@ def _build_question(q_type: str, state: PossessionState,
         return (f"How many things does {person} have?", f"{word}.")
 
     if q_type == "who_doesnt_have":
-        held = [o for o in objects if state.who_has(o) is not None]
+        held = [o for o in objects if o in UNIQUE_OBJECTS and state.who_has(o) is not None]
         if not held:
             return None
         obj = random.choice(held)
@@ -195,7 +234,7 @@ def _build_question(q_type: str, state: PossessionState,
         )
 
     if q_type == "anyone_has":
-        obj = random.choice(OBJECTS)
+        obj = random.choice(UNIQUE_OBJECTS)
         holder = state.who_has(obj)
         q = f"Does anyone have the {obj}?"
         if holder is not None:
@@ -252,10 +291,10 @@ def _build_question(q_type: str, state: PossessionState,
 
 
 _POSSESSION_TEMPLATES = [
-    lambda p, obj: f"{p} has the {obj}.",
-    lambda p, obj: f"{p} gets the {obj}.",
-    lambda p, obj: f"{p} receives the {obj}.",
-    lambda p, obj: f"{p} takes the {obj}.",
+    lambda p, obj: f"{p} has {_format_possession_item(obj)}.",
+    lambda p, obj: f"{p} gets {_format_possession_item(obj)}.",
+    lambda p, obj: f"{p} receives {_format_possession_item(obj)}.",
+    lambda p, obj: f"{p} takes {_format_possession_item(obj)}.",
 ]
 
 _COMPOUND_POSSESSION_TEMPLATES = [
@@ -290,10 +329,10 @@ def _add_possession(state: PossessionState, turns: List[Tuple[str, str]],
 
 
 _TRANSFER_TEMPLATES = [
-    lambda g, r, obj: f"{g} gives the {obj} to {r}.",
-    lambda g, r, obj: f"{g} passes the {obj} to {r}.",
-    lambda g, r, obj: f"{r} takes the {obj} from {g}.",
-    lambda g, r, obj: f"{r} gets the {obj} from {g}.",
+    lambda g, r, obj: f"{g} gives {_format_possession_item(obj)} to {r}.",
+    lambda g, r, obj: f"{g} passes {_format_possession_item(obj)} to {r}.",
+    lambda g, r, obj: f"{r} takes {_format_possession_item(obj)} from {g}.",
+    lambda g, r, obj: f"{r} gets {_format_possession_item(obj)} from {g}.",
 ]
 
 
@@ -339,6 +378,92 @@ def _add_quantity_transfer(
     state.transfer(giver, receiver, obj, count)
     phrase = _quantity_word(obj, count)
     turns.append((f"{giver} gives {phrase} to {receiver}.", ACK))
+    return True
+
+
+def _add_quantity_transfer_with_followup(
+    state: PossessionState,
+    turns: List[Tuple[str, str]],
+    people: List[str],
+) -> bool:
+    """Quantity transfer followed immediately by how_many for both giver and receiver."""
+    obj = random.choice(COUNTABLE_OBJECTS)
+    givers = [p for p in people if state.get_count(p, obj) >= 2]
+    if not givers:
+        return False
+    giver = random.choice(givers)
+    max_give = state.get_count(giver, obj)
+    count = random.randint(1, max_give)
+    receivers = [p for p in people if p != giver]
+    if not receivers:
+        return False
+    receiver = random.choice(receivers)
+    state.transfer(giver, receiver, obj, count)
+    phrase = _quantity_word(obj, count)
+    turns.append((f"{giver} gives {phrase} to {receiver}.", ACK))
+    plural = OBJ_TO_PLURAL[obj]
+    for person in [giver, receiver]:
+        c = state.get_count(person, obj)
+        word = NUMBER_WORDS.get(c, str(c))
+        turns.append((f"How many {plural} does {person} have?", f"{word}."))
+    return True
+
+
+def _add_long_chain(
+    state: PossessionState,
+    turns: List[Tuple[str, str]],
+    people: List[str],
+    assigned_objects: List[str],
+) -> bool:
+    """Add 4-6 sequential transfers of one unique object, then who_has."""
+    num_transfers = random.randint(4, 6)
+    if len(people) < num_transfers + 1:
+        return False
+    chain_people = random.sample(people, num_transfers + 1)
+    obj = random.choice(UNIQUE_OBJECTS)
+    if state.who_has(obj) is not None:
+        return False
+    state.give(chain_people[0], obj)
+    tpl = random.choice(_POSSESSION_TEMPLATES)
+    turns.append((tpl(chain_people[0], obj), ACK))
+    for i in range(num_transfers):
+        from_p, to_p = chain_people[i], chain_people[i + 1]
+        tpl = random.choice(_TRANSFER_TEMPLATES)
+        state.transfer(from_p, to_p, obj)
+        turns.append((tpl(from_p, to_p, obj), ACK))
+    final_holder = chain_people[-1]
+    turns.append((f"Who has the {obj}?", f"{final_holder} has the {obj}."))
+    assigned_objects.append(obj)
+    return True
+
+
+def _add_disambiguation_chain(
+    state: PossessionState,
+    turns: List[Tuple[str, str]],
+    people: List[str],
+    assigned_objects: List[str],
+) -> bool:
+    """Two people, two objects, cross-transfers, then who_has for each."""
+    if len(people) < 2:
+        return False
+    unassigned = [o for o in UNIQUE_OBJECTS if state.who_has(o) is None]
+    if len(unassigned) < 2:
+        return False
+    a, b = random.sample(people, 2)
+    obj1, obj2 = random.sample(unassigned, 2)
+    state.give(a, obj1)
+    state.give(b, obj2)
+    tpl = random.choice(_POSSESSION_TEMPLATES)
+    turns.append((tpl(a, obj1), ACK))
+    turns.append((tpl(b, obj2), ACK))
+    state.transfer(a, b, obj1)
+    state.transfer(b, a, obj2)
+    tpl = random.choice(_TRANSFER_TEMPLATES)
+    turns.append((tpl(a, b, obj1), ACK))
+    turns.append((tpl(b, a, obj2), ACK))
+    turns.append((f"Who has the {obj1}?", f"{b} has the {obj1}."))
+    turns.append((f"Who has the {obj2}?", f"{a} has the {obj2}."))
+    assigned_objects.extend([obj1, obj2])
     return True
 
 
@@ -416,18 +541,30 @@ def generate_conversation_example() -> Optional[Tuple[List[Tuple[str, str]], Pos
             phrase = _quantity_word(obj, count)
             turns.append((f"{person} has {phrase}.", ACK))
 
-    # Phase 2: interleaved actions (questions, transfers, quantity ops, more possessions)
-    num_extra_actions = random.randint(0, 5)
+    # Interleaved actions: questions, transfers, quantity ops, long chains, disambiguation
+    num_extra_actions = random.randint(0, 6)
     for _ in range(num_extra_actions):
         r = random.random()
-        if r < 0.35:
+        if r < 0.28:
             _add_question(state, turns, people, assigned_objects)
-        elif r < 0.55 and num_people >= 2:
+        elif r < 0.48 and num_people >= 2:
             _add_transfer(state, turns, people)
-        elif r < 0.65:
+        elif r < 0.58:
             _add_quantity_possession(state, turns, people)
-        elif r < 0.80 and num_people >= 2:
-            if _add_quantity_transfer(state, turns, people):
+        elif r < 0.68 and num_people >= 2:
+            if random.random() < 0.4:
+                _add_quantity_transfer_with_followup(state, turns, people)
+            elif _add_quantity_transfer(state, turns, people):
+                pass
+            elif num_people >= 2:
+                _add_transfer(state, turns, people)
+        elif r < 0.78 and num_people >= 5:
+            if _add_long_chain(state, turns, people, assigned_objects):
+                pass
+            elif num_people >= 2:
+                _add_transfer(state, turns, people)
+        elif r < 0.88 and num_people >= 2:
+            if _add_disambiguation_chain(state, turns, people, assigned_objects):
                 pass
             elif num_people >= 2:
                 _add_transfer(state, turns, people)
@@ -498,7 +635,7 @@ def generate_and_save(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate TinyGPT data splits")
-    parser.add_argument("--train", type=int, default=20_000)
+    parser.add_argument("--train", type=int, default=300_000)
     parser.add_argument("--val", type=int, default=2_000)
     parser.add_argument("--test", type=int, default=2_000)
     parser.add_argument("--outdir", type=str, default="data")
