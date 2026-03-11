@@ -108,7 +108,7 @@ def create_dataloader(
     max_seq_len: int = 256,
     batch_size: int = 64,
     shuffle: bool = True,
-    num_workers: int = 0,
+    num_workers: int = 4,
 ) -> DataLoader:
     dataset = ConversationDataset(path, max_seq_len=max_seq_len)
     return DataLoader(
@@ -118,4 +118,5 @@ def create_dataloader(
         collate_fn=collate_fn,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=num_workers > 0,
     )

@@ -3,7 +3,6 @@ Decoder-only transformer for WorldLLM.
 GPT-style: token embeddings + positional embeddings, causal self-attention, feed-forward.
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,18 +17,11 @@ class CausalSelfAttention(nn.Module):
 
         self.num_heads = config.num_heads
         self.head_dim = config.embed_dim // config.num_heads
+        self.dropout = config.dropout
 
         self.qkv = nn.Linear(config.embed_dim, 3 * config.embed_dim)
         self.out_proj = nn.Linear(config.embed_dim, config.embed_dim)
-        self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-
-        # Causal mask: prevent attending to future tokens
-        self.register_buffer(
-            "causal_mask",
-            torch.tril(torch.ones(config.max_seq_len, config.max_seq_len))
-            .unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
-        )
 
     def forward(self, x):
         B, T, C = x.shape
@@ -41,12 +33,14 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
-        attn = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
-        attn = attn.masked_fill(self.causal_mask[:, :, :T, :T] == 0, float("-inf"))
-        attn = F.softmax(attn, dim=-1)
-        attn = self.attn_dropout(attn)
+        # Uses FlashAttention-2 on A100 automatically
+        out = F.scaled_dot_product_attention(
+            q, k, v,
+            is_causal=True,
+            dropout_p=self.dropout if self.training else 0.0,
+        )
 
-        out = (attn @ v).transpose(1, 2).contiguous().view(B, T, C)
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
         return self.resid_dropout(self.out_proj(out))
 
 

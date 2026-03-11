@@ -20,10 +20,13 @@ class ModelConfig:
 class TrainConfig:
     train_path: str = "data/train.txt"
     val_path: str = "data/val.txt"
-    batch_size: int = 64
-    learning_rate: float = 3e-3
-    weight_decay: float = 0.01
+    batch_size: int = 256
+    learning_rate: float = 3e-4
+    weight_decay: float = 0.1
     epochs: int = 20
     grad_clip: float = 1.0
     save_dir: str = "checkpoints"
     device: str = "auto"
+    num_workers: int = 4
+    warmup_steps: int = 200
+    min_lr_fraction: float = 0.1
