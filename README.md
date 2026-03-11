@@ -18,6 +18,12 @@ python data_generator.py --train 200000 --val 2000 --test 2000 --outdir data
 
 ### 3. Train
 
+If you get a `libcuda.so cannot found` error from `torch.compile`, refresh the linker cache first:
+
+```bash
+sudo ldconfig
+```
+
 ```bash
 python train.py
 ```

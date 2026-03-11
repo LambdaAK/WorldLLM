@@ -20,10 +20,10 @@ from typing import Optional
 SPECIAL_TOKENS = ["<pad>", "<sos>", "<eos>", "<unk>", "CLIENT:", "OUTPUT:"]
 
 # People
-PEOPLE = ["Alice", "Bob", "Charlie"]
+PEOPLE = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry"]
 
 # Objects
-OBJECTS = ["ball", "key", "clock", "book"]
+OBJECTS = ["ball", "key", "clock", "book", "hat", "ring", "coin", "lamp", "pen", "cup"]
 
 # Verbs for possession/transfer
 VERBS = [
@@ -67,14 +67,16 @@ COMMON = [
     "is", "are", "was", "were", "be", "been",
     "in", "on", "at", "here", "there",
     "yes", "no", "not", "all", "both",
-    "one", "two", "three", "four", "first", "last",
+    "one", "two", "three", "four", "five", "six",
+    "seven", "eight", "nine", "ten", "first", "last",
     "many", "things", "none", "nothing",
+    "anyone", "more", "than",
     "answer", "question", "scenario", "based", "following",
     "Okay", "got",
 ]
 
 # Punctuation (handled as tokens)
-PUNCTUATION = [".", "?", "!"]
+PUNCTUATION = [".", "?", "!", ","]
 
 # Build full vocabulary
 def _build_vocab() -> list[str]:

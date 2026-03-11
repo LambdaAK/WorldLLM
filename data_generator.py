@@ -27,9 +27,15 @@ CLIENT_PREFIX = "CLIENT:\n"
 OUTPUT_PREFIX = "OUTPUT:\n"
 CONVERSATION_SEPARATOR = "\n\n---\n\n"
 
-NUMBER_WORDS = {0: "none", 1: "one", 2: "two", 3: "three", 4: "four"}
+NUMBER_WORDS = {
+    0: "none", 1: "one", 2: "two", 3: "three", 4: "four",
+    5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+}
 
-QUESTION_TYPES = ["who_has", "what_has", "yes_no", "who_has_what", "how_many"]
+QUESTION_TYPES = [
+    "who_has", "what_has", "yes_no", "who_has_what", "how_many",
+    "who_doesnt_have", "anyone_has", "comparison",
+]
 
 
 class PossessionState:
@@ -91,6 +97,13 @@ def format_conversation(turns: List[Tuple[str, str]]) -> str:
     return CONVERSATION_TURN_SEP.join(parts)
 
 
+def _format_people(names: List[str]) -> str:
+    """['Alice'] -> 'Alice', ['Alice', 'Bob'] -> 'Alice and Bob'"""
+    if len(names) == 1:
+        return names[0]
+    return " and ".join(names)
+
+
 def _build_question(q_type: str, state: PossessionState,
                     people: List[str], objects: List[str]
                     ) -> Optional[Tuple[str, str]]:
@@ -135,7 +148,61 @@ def _build_question(q_type: str, state: PossessionState,
         word = NUMBER_WORDS.get(c, str(c))
         return (f"How many things does {person} have?", f"{word}.")
 
+    if q_type == "who_doesnt_have":
+        held = [o for o in objects if state.who_has(o) is not None]
+        if not held:
+            return None
+        obj = random.choice(held)
+        non_holders = sorted(p for p in people if obj not in state.what_does_have(p))
+        if not non_holders:
+            return None
+        verb = "does not" if len(non_holders) == 1 else "do not"
+        return (
+            f"Who does not have the {obj}?",
+            f"{_format_people(non_holders)} {verb} have the {obj}.",
+        )
+
+    if q_type == "anyone_has":
+        obj = random.choice(OBJECTS)
+        holder = state.who_has(obj)
+        q = f"Does anyone have the {obj}?"
+        if holder is not None:
+            return (q, f"Yes, {holder} has the {obj}.")
+        return (q, "No.")
+
+    if q_type == "comparison":
+        if len(people) < 2:
+            return None
+        a, b = random.sample(people, 2)
+        q = f"Does {a} have more things than {b}?"
+        if state.count(a) > state.count(b):
+            return (q, "Yes.")
+        return (q, "No.")
+
     return None
+
+
+_POSSESSION_TEMPLATES = [
+    lambda p, obj: f"{p} has the {obj}.",
+    lambda p, obj: f"{p} gets the {obj}.",
+    lambda p, obj: f"{p} receives the {obj}.",
+    lambda p, obj: f"{p} takes the {obj}.",
+]
+
+_COMPOUND_POSSESSION_TEMPLATES = [
+    lambda p, objs: f"{p} has {_format_objects(objs)}.",
+    lambda p, objs: f"{p} gets {_format_objects(objs)}.",
+    lambda p, objs: f"{p} receives {_format_objects(objs)}.",
+]
+
+
+def _phrase_possession(person: str, objs: List[str]) -> List[Tuple[str, str]]:
+    """Generate phrased possession statement(s) for one person getting objects."""
+    if len(objs) >= 2 and random.random() < 0.4:
+        tpl = random.choice(_COMPOUND_POSSESSION_TEMPLATES)
+        return [(tpl(person, objs), ACK)]
+    tpl = random.choice(_POSSESSION_TEMPLATES)
+    return [(tpl(person, obj), ACK) for obj in objs]
 
 
 def _add_possession(state: PossessionState, turns: List[Tuple[str, str]],
@@ -151,12 +218,16 @@ def _add_possession(state: PossessionState, turns: List[Tuple[str, str]],
     objs = sorted(random.sample(available, count))
     for obj in objs:
         state.give(person, obj)
-    if count >= 2 and random.random() < 0.4:
-        turns.append((f"{person} has {_format_objects(objs)}.", ACK))
-    else:
-        for obj in objs:
-            turns.append((f"{person} has the {obj}.", ACK))
+    turns.extend(_phrase_possession(person, objs))
     return objs
+
+
+_TRANSFER_TEMPLATES = [
+    lambda g, r, obj: f"{g} gives the {obj} to {r}.",
+    lambda g, r, obj: f"{g} passes the {obj} to {r}.",
+    lambda g, r, obj: f"{r} takes the {obj} from {g}.",
+    lambda g, r, obj: f"{r} gets the {obj} from {g}.",
+]
 
 
 def _add_transfer(state: PossessionState, turns: List[Tuple[str, str]],
@@ -172,7 +243,8 @@ def _add_transfer(state: PossessionState, turns: List[Tuple[str, str]],
         return False
     receiver = random.choice(receivers)
     state.transfer(giver, receiver, obj)
-    turns.append((f"{giver} gives the {obj} to {receiver}.", ACK))
+    tpl = random.choice(_TRANSFER_TEMPLATES)
+    turns.append((tpl(giver, receiver, obj), ACK))
     return True
 
 
@@ -220,11 +292,7 @@ def generate_conversation_example() -> Optional[Tuple[List[Tuple[str, str]], Pos
         for obj in objs:
             state.give(person, obj)
             assigned_objects.append(obj)
-        if len(objs) >= 2 and random.random() < 0.4:
-            turns.append((f"{person} has {_format_objects(objs)}.", ACK))
-        else:
-            for obj in objs:
-                turns.append((f"{person} has the {obj}.", ACK))
+        turns.extend(_phrase_possession(person, objs))
 
     # Phase 2: interleaved actions (questions, transfers, more possessions)
     num_extra_actions = random.randint(0, 4)
