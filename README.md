@@ -51,12 +51,4 @@ python test_model.py
 
 ## A100 Optimizations
 
-The training script automatically enables the following when a CUDA GPU is detected:
-
-- FlashAttention-2 via `F.scaled_dot_product_attention`
-- BFloat16 mixed precision via `torch.autocast`
-- TF32 tensor cores for ~3x faster matmuls
-- `torch.compile` for kernel fusion and graph optimization
-- Fused AdamW optimizer (single CUDA kernel)
-- Cosine LR schedule with linear warmup (200 steps)
-- Multi-worker DataLoader with persistent workers and pinned memory
+On CUDA GPUs, training uses FlashAttention, bfloat16, TF32, compiled kernels, fused AdamW, and other fast defaults.
