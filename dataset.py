@@ -1,5 +1,5 @@
 """
-Dataset and DataLoader for WorldLLM conversation data.
+Dataset and DataLoader for TinyGPT conversation data.
 Reads the generated .txt files and produces padded token sequences
 for decoder-only next-token prediction.
 

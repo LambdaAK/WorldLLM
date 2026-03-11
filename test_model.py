@@ -1,14 +1,14 @@
 """Quick non-interactive test: run a few conversations through the model."""
 
 import torch
-from model import WorldLLM
+from model import TinyGPT
 from vocabulary import tokenize, detokenize, EOS_ID, CLIENT_ID
 from interact import build_conversation_tokens, generate_response
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 checkpoint = torch.load("checkpoints/best.pt", map_location=device, weights_only=False)
 config = checkpoint["config"]
-model = WorldLLM(config).to(device)
+model = TinyGPT(config).to(device)
 model.load_state_dict(checkpoint["model_state_dict"])
 model.eval()
 print(f"Model: epoch {checkpoint.get('epoch','?')}, val_loss {checkpoint.get('val_loss','?')}\n")

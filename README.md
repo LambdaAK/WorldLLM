@@ -1,4 +1,4 @@
-# WorldLLM
+# TinyGPT
 
 A small decoder-only transformer trained from scratch to track object possession across multi-turn conversations. Given statements like "Alice has the ball" and "Alice gives the ball to Bob", it answers questions like "Who has the ball?" correctly.
 

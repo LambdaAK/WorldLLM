@@ -1,5 +1,5 @@
 """
-Decoder-only transformer for WorldLLM.
+Decoder-only transformer for TinyGPT.
 GPT-style: token embeddings + positional embeddings, causal self-attention, feed-forward.
 """
 
@@ -74,7 +74,7 @@ class TransformerBlock(nn.Module):
         return x
 
 
-class WorldLLM(nn.Module):
+class TinyGPT(nn.Module):
 
     def __init__(self, config: ModelConfig):
         super().__init__()

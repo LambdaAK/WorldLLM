@@ -1,5 +1,5 @@
 """
-Interactive chat with a trained WorldLLM model.
+Interactive chat with a trained TinyGPT model.
 
 Usage:
     python interact.py
@@ -15,7 +15,7 @@ import argparse
 import glob
 import os
 import torch
-from model import WorldLLM
+from model import TinyGPT
 from config import ModelConfig
 from vocabulary import (
     tokenize, detokenize,
@@ -72,7 +72,7 @@ def pick_checkpoint(checkpoint_dir: str = "checkpoints") -> str:
 def load_model(checkpoint_path: str, device: torch.device):
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config = checkpoint["config"]
-    model = WorldLLM(config).to(device)
+    model = TinyGPT(config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     epoch = checkpoint.get("epoch", "?")
@@ -137,7 +137,7 @@ def generate_response(model, token_ids, config, device, temperature=0.8, top_k=2
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Chat with WorldLLM")
+    parser = argparse.ArgumentParser(description="Chat with TinyGPT")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to checkpoint (if not set, shows a picker)")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints",
@@ -161,7 +161,7 @@ def main():
     model, config = load_model(checkpoint_path, device)
     print(f"Device: {device}")
     print()
-    print("WorldLLM Interactive Chat")
+    print("TinyGPT Interactive Chat")
     print("=" * 40)
     print("You are the CLIENT. Type messages describing")
     print("who has what, transfers, or ask questions.")

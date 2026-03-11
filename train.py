@@ -1,5 +1,5 @@
 """
-Training script for WorldLLM.
+Training script for TinyGPT.
 
 Usage:
     python train.py
@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from config import ModelConfig, TrainConfig
 from dataset import create_dataloader
-from model import WorldLLM
+from model import TinyGPT
 from vocabulary import PAD_ID, VOCAB_SIZE
 
 
@@ -87,7 +87,7 @@ def train(model_config: ModelConfig, train_config: TrainConfig):
     configure_a100_optimizations(device)
 
     model_config.vocab_size = VOCAB_SIZE
-    model = WorldLLM(model_config).to(device)
+    model = TinyGPT(model_config).to(device)
     print(f"Model parameters: {model.count_parameters():,}")
 
     if device.type == "cuda":
@@ -214,7 +214,7 @@ def train(model_config: ModelConfig, train_config: TrainConfig):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train WorldLLM")
+    parser = argparse.ArgumentParser(description="Train TinyGPT")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)

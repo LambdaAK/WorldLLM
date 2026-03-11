@@ -1,5 +1,5 @@
 """
-Hyperparameters for WorldLLM.
+Hyperparameters for TinyGPT.
 """
 
 from dataclasses import dataclass

@@ -280,7 +280,7 @@ def generate_and_save(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate WorldLLM data splits")
+    parser = argparse.ArgumentParser(description="Generate TinyGPT data splits")
     parser.add_argument("--train", type=int, default=20_000)
     parser.add_argument("--val", type=int, default=2_000)
     parser.add_argument("--test", type=int, default=2_000)
