@@ -7,8 +7,9 @@ ground-truth PossessionState so answers are always correct.
 
 Supports: simple possession ("Alice has the ball"), compound possession
 ("Alice has the ball and the key"), transfers ("Alice gives the ball to Bob"),
-multi-hop transfers, and five question types (who_has, what_has, yes_no,
-who_has_what, how_many).
+quantity reasoning ("Alice has 5 apples", "Alice gives 2 apples to Bob"),
+and question types including who_has, what_has, how_many, who_has_plural,
+how_many_countable, who_has_most.
 
 Usage:
     python data_generator.py --train 200000 --val 2000 --test 2000 --outdir data
@@ -19,7 +20,14 @@ import argparse
 import os
 import random
 from typing import Iterator, List, Optional, Tuple
-from vocabulary import PEOPLE, OBJECTS, is_valid_sentence
+from vocabulary import (
+    PEOPLE,
+    OBJECTS,
+    UNIQUE_OBJECTS,
+    COUNTABLE_OBJECTS,
+    PLURALS,
+    is_valid_sentence,
+)
 
 ACK = "Got it."
 CONVERSATION_TURN_SEP = "\n\n"
@@ -35,45 +43,69 @@ NUMBER_WORDS = {
 QUESTION_TYPES = [
     "who_has", "what_has", "yes_no", "who_has_what", "how_many",
     "who_doesnt_have", "anyone_has", "comparison",
+    "who_has_plural", "how_many_countable", "who_has_most",
 ]
 
 
-class PossessionState:
-    """Ground-truth tracker for object ownership (person -> set of objects).
+# Plural form for countable objects
+OBJ_TO_PLURAL = {"apple": "apples", "orange": "oranges", "coin": "coins"}
 
-    Used during data generation to produce correct answers for questions.
-    Supports give, transfer, and various query operations.
+
+class PossessionState:
+    """Ground-truth tracker for object ownership.
+
+    Supports both unique objects (ball, key, ...) and countable objects (apple, orange, coin).
+    State: person -> object -> count (int >= 0).
+    For unique objects, at most one person has count >= 1.
     """
 
     def __init__(self):
-        self.holders: dict = {}
+        self.quantities: dict = {}  # person -> object -> count
 
-    def give(self, person: str, obj: str) -> None:
-        self.holders[person] = self.holders.get(person, set()) | {obj}
+    def _ensure_person(self, person: str) -> None:
+        if person not in self.quantities:
+            self.quantities[person] = {}
 
-    def transfer(self, from_person: str, to_person: str, obj: str) -> bool:
-        if from_person not in self.holders or obj not in self.holders[from_person]:
+    def give(self, person: str, obj: str, count: int = 1) -> None:
+        self._ensure_person(person)
+        self.quantities[person][obj] = self.quantities[person].get(obj, 0) + count
+
+    def transfer(self, from_person: str, to_person: str, obj: str, count: int = 1) -> bool:
+        if self.get_count(from_person, obj) < count:
             return False
-        self.holders[from_person].discard(obj)
-        self.holders[to_person] = self.holders.get(to_person, set()) | {obj}
+        self._ensure_person(from_person)
+        self.quantities[from_person][obj] -= count
+        if self.quantities[from_person][obj] == 0:
+            del self.quantities[from_person][obj]
+        self.give(to_person, obj, count)
         return True
 
+    def get_count(self, person: str, obj: str) -> int:
+        return self.quantities.get(person, {}).get(obj, 0)
+
     def who_has(self, obj: str) -> Optional[str]:
-        for p, objs in self.holders.items():
-            if obj in objs:
+        """Who has this object (count >= 1). For unique objects, first holder."""
+        for p in sorted(self.quantities.keys()):
+            if self.get_count(p, obj) >= 1:
                 return p
         return None
 
+    def who_has_any(self, obj: str) -> List[str]:
+        """People with count > 0 for this object."""
+        return sorted(p for p in self.quantities if self.get_count(p, obj) > 0)
+
     def what_does_have(self, person: str) -> List[str]:
-        return sorted(self.holders.get(person, set()))
+        """Object types person has (count >= 1)."""
+        return sorted(obj for obj, c in self.quantities.get(person, {}).items() if c >= 1)
 
     def count(self, person: str) -> int:
-        return len(self.holders.get(person, set()))
+        """Number of distinct object types person has (for 'how many things')."""
+        return len(self.what_does_have(person))
 
     def all_possessions(self) -> List[Tuple[str, List[str]]]:
         result = []
-        for p in sorted(self.holders.keys()):
-            objs = sorted(self.holders.get(p, set()))
+        for p in sorted(self.quantities.keys()):
+            objs = self.what_does_have(p)
             if objs:
                 result.append((p, objs))
         return result
@@ -179,6 +211,43 @@ def _build_question(q_type: str, state: PossessionState,
             return (q, "Yes.")
         return (q, "No.")
 
+    if q_type == "who_has_plural":
+        countable_in_use = [o for o in COUNTABLE_OBJECTS if state.who_has_any(o)]
+        if not countable_in_use:
+            return None
+        obj = random.choice(countable_in_use)
+        plural = OBJ_TO_PLURAL[obj]
+        holders = state.who_has_any(obj)
+        if not holders:
+            return None
+        return (f"Who has {plural}?", f"{_format_people(holders)}.")
+
+    if q_type == "how_many_countable":
+        countable_in_use = [o for o in COUNTABLE_OBJECTS if state.who_has_any(o)]
+        if not countable_in_use:
+            return None
+        obj = random.choice(countable_in_use)
+        plural = OBJ_TO_PLURAL[obj]
+        people_with_some = [p for p in people if state.get_count(p, obj) > 0]
+        if not people_with_some:
+            return None
+        person = random.choice(people_with_some)
+        c = state.get_count(person, obj)
+        word = NUMBER_WORDS.get(c, str(c))
+        return (f"How many {plural} does {person} have?", f"{word}.")
+
+    if q_type == "who_has_most":
+        countable_in_use = [o for o in COUNTABLE_OBJECTS if state.who_has_any(o)]
+        if not countable_in_use:
+            return None
+        obj = random.choice(countable_in_use)
+        plural = OBJ_TO_PLURAL[obj]
+        holders = state.who_has_any(obj)
+        if len(holders) < 2:
+            return None
+        best = max(holders, key=lambda p: state.get_count(p, obj))
+        return (f"Who has the most {plural}?", f"{best}.")
+
     return None
 
 
@@ -209,9 +278,7 @@ def _add_possession(state: PossessionState, turns: List[Tuple[str, str]],
                      people: List[str], objects_pool: List[str]) -> List[str]:
     """Give one person 1-2 new objects. Returns list of newly assigned objects."""
     person = random.choice(people)
-    available = [o for o in objects_pool
-                 if state.who_has(o) is None and o not in [
-                     o2 for p in state.holders for o2 in state.holders.get(p, set())]]
+    available = [o for o in objects_pool if state.who_has(o) is None]
     if not available:
         return []
     count = min(random.choice([1, 1, 1, 2]), len(available))
@@ -228,6 +295,51 @@ _TRANSFER_TEMPLATES = [
     lambda g, r, obj: f"{r} takes the {obj} from {g}.",
     lambda g, r, obj: f"{r} gets the {obj} from {g}.",
 ]
+
+
+def _quantity_word(obj: str, count: int) -> str:
+    """Return '5 apples' or '1 apple' (singular when count is 1)."""
+    if count == 1:
+        return f"1 {obj}"
+    return f"{count} {OBJ_TO_PLURAL[obj]}"
+
+
+def _add_quantity_possession(
+    state: PossessionState,
+    turns: List[Tuple[str, str]],
+    people: List[str],
+) -> bool:
+    """Add a quantity possession: 'Alice has 5 apples.' or 'Alice has 1 apple.'"""
+    person = random.choice(people)
+    obj = random.choice(COUNTABLE_OBJECTS)
+    count = random.randint(1, 10)
+    state.give(person, obj, count)
+    phrase = _quantity_word(obj, count)
+    turns.append((f"{person} has {phrase}.", ACK))
+    return True
+
+
+def _add_quantity_transfer(
+    state: PossessionState,
+    turns: List[Tuple[str, str]],
+    people: List[str],
+) -> bool:
+    """Add a quantity transfer: 'Alice gives 2 apples to Bob.'"""
+    obj = random.choice(COUNTABLE_OBJECTS)
+    givers = [p for p in people if state.get_count(p, obj) >= 2]
+    if not givers:
+        return False
+    giver = random.choice(givers)
+    max_give = state.get_count(giver, obj)
+    count = random.randint(1, max_give)
+    receivers = [p for p in people if p != giver]
+    if not receivers:
+        return False
+    receiver = random.choice(receivers)
+    state.transfer(giver, receiver, obj, count)
+    phrase = _quantity_word(obj, count)
+    turns.append((f"{giver} gives {phrase} to {receiver}.", ACK))
+    return True
 
 
 def _add_transfer(state: PossessionState, turns: List[Tuple[str, str]],
@@ -294,20 +406,34 @@ def generate_conversation_example() -> Optional[Tuple[List[Tuple[str, str]], Pos
             assigned_objects.append(obj)
         turns.extend(_phrase_possession(person, objs))
 
-    # Phase 2: interleaved actions (questions, transfers, more possessions)
-    num_extra_actions = random.randint(0, 4)
+    # Phase 1b: quantity possessions (countable objects with counts)
+    for person in people:
+        if random.random() < 0.4:
+            obj = random.choice(COUNTABLE_OBJECTS)
+            count = random.randint(1, 10)
+            state.give(person, obj, count)
+            assigned_objects.append(obj)
+            phrase = _quantity_word(obj, count)
+            turns.append((f"{person} has {phrase}.", ACK))
+
+    # Phase 2: interleaved actions (questions, transfers, quantity ops, more possessions)
+    num_extra_actions = random.randint(0, 5)
     for _ in range(num_extra_actions):
         r = random.random()
-        if r < 0.45:
+        if r < 0.35:
             _add_question(state, turns, people, assigned_objects)
-        elif r < 0.75 and num_people >= 2:
+        elif r < 0.55 and num_people >= 2:
             _add_transfer(state, turns, people)
-        elif r < 0.90:
+        elif r < 0.65:
+            _add_quantity_possession(state, turns, people)
+        elif r < 0.80 and num_people >= 2:
+            if _add_quantity_transfer(state, turns, people):
+                pass
+            elif num_people >= 2:
+                _add_transfer(state, turns, people)
+        else:
             new = _add_possession(state, turns, people, objects)
             assigned_objects.extend(new)
-        else:
-            if num_people >= 2:
-                _add_transfer(state, turns, people)
 
     # Phase 3: 80% chance of ending with a final question
     if random.random() < 0.8:

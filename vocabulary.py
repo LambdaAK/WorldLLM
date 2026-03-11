@@ -22,8 +22,16 @@ SPECIAL_TOKENS = ["<pad>", "<sos>", "<eos>", "<unk>", "CLIENT:", "OUTPUT:"]
 # People
 PEOPLE = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry"]
 
-# Objects
-OBJECTS = ["ball", "key", "clock", "book", "hat", "ring", "coin", "lamp", "pen", "cup"]
+# Objects (unique: one per world; countable: support quantities)
+UNIQUE_OBJECTS = ["ball", "key", "clock", "book", "hat", "ring", "lamp", "pen", "cup"]
+COUNTABLE_OBJECTS = ["apple", "orange", "coin"]
+OBJECTS = UNIQUE_OBJECTS + COUNTABLE_OBJECTS
+
+# Plurals for countable objects
+PLURALS = ["apples", "oranges", "coins"]
+
+# Digits for quantity phrases ("5 apples")
+DIGITS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
 # Verbs for possession/transfer
 VERBS = [
@@ -70,7 +78,7 @@ COMMON = [
     "one", "two", "three", "four", "five", "six",
     "seven", "eight", "nine", "ten", "first", "last",
     "many", "things", "none", "nothing",
-    "anyone", "more", "than",
+    "anyone", "more", "most", "than",
     "answer", "question", "scenario", "based", "following",
     "Okay", "got",
 ]
@@ -85,6 +93,7 @@ def _build_vocab() -> list[str]:
         SPECIAL_TOKENS,
         PEOPLE,
         OBJECTS,
+        PLURALS,
         VERBS,
         QUESTION_WORDS,
         PRONOUNS,
@@ -92,6 +101,7 @@ def _build_vocab() -> list[str]:
         PREPOSITIONS,
         CONNECTORS,
         COMMON,
+        DIGITS,
         PUNCTUATION,
     ]
     seen = set()
