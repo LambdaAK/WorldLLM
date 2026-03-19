@@ -6,6 +6,10 @@ let currentChatId = null;
 const STORAGE_KEY = "tinygpt-chats";
 const MAX_CHATS = 50;
 
+const KNOWN_PEOPLE = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry"];
+const KNOWN_OBJECTS = ["ball", "key", "clock", "book", "hat", "ring", "lamp", "pen", "cup", "apple", "orange", "coin"];
+const BASE_CHIPS = ["Alice", "Bob", "Charlie", "ball", "key", "clock"];
+
 // DOM refs
 const messagesEl = document.getElementById("messages");
 const emptyState = document.getElementById("emptyState");
@@ -21,6 +25,9 @@ const tempVal = document.getElementById("tempVal");
 const topkVal = document.getElementById("topkVal");
 const modelInfo = document.getElementById("modelInfo");
 const chatHistoryEl = document.getElementById("chatHistory");
+const syntaxHintsToggle = document.getElementById("syntaxHintsToggle");
+const syntaxHintsBody = document.getElementById("syntaxHintsBody");
+const entityChipsEl = document.getElementById("entityChips");
 
 // --- localStorage helpers ---
 function loadChats() {
@@ -119,6 +126,57 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
+function extractEntitiesFromConversation(msgs) {
+  const seen = new Set();
+  const text = msgs.map((m) => m.content || "").join(" ").toLowerCase();
+  KNOWN_PEOPLE.forEach((p) => {
+    if (text.includes(p.toLowerCase())) seen.add(p);
+  });
+  KNOWN_OBJECTS.forEach((o) => {
+    if (text.includes(o.toLowerCase())) seen.add(o);
+  });
+  return [...seen];
+}
+
+function renderEntityChips() {
+  if (!entityChipsEl) return;
+  const fromConv = extractEntitiesFromConversation(messages);
+  const combined = [...new Set([...fromConv, ...BASE_CHIPS])];
+  const rest = [...KNOWN_PEOPLE, ...KNOWN_OBJECTS].filter((x) => !combined.includes(x));
+  const toShow = [...combined, ...rest].slice(0, 16);
+  entityChipsEl.innerHTML = toShow
+    .map((e) => `<button type="button" class="entity-chip" data-entity="${escapeHtml(e)}">${escapeHtml(e)}</button>`)
+    .join("");
+}
+
+function parsePossession(text) {
+  const pairs = [];
+  const seen = new Set();
+  const regex = /\b(\w+)\s+has\s+(?:the\s+)?(\w+)/gi;
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    const key = m[1] + "|" + m[2];
+    if (!seen.has(key)) {
+      seen.add(key);
+      pairs.push({ person: m[1], object: m[2] });
+    }
+  }
+  return pairs;
+}
+
+function renderPossessionDiagram(pairs) {
+  if (pairs.length === 0) return null;
+  const div = document.createElement("div");
+  div.className = "possession-diagram";
+  pairs.forEach(({ person, object }) => {
+    const item = document.createElement("div");
+    item.className = "possession-diagram-item";
+    item.innerHTML = `<span class="person">${escapeHtml(person)}</span><span class="arrow">→</span><span class="object">${escapeHtml(object)}</span>`;
+    div.appendChild(item);
+  });
+  return div;
+}
+
 function loadChat(id) {
   if (isStreaming) return;
   const chats = loadChats();
@@ -141,6 +199,7 @@ function loadChat(id) {
 
   scrollToBottom();
   renderChatHistory();
+  renderEntityChips();
 }
 
 // --- Message UI ---
@@ -164,6 +223,9 @@ function appendAssistantBubble(text, withActions = true) {
   content.className = "assistant-content";
   content.textContent = text;
   wrap.appendChild(content);
+
+  const diagram = renderPossessionDiagram(parsePossession(text));
+  if (diagram) wrap.appendChild(diagram);
 
   if (withActions) {
     const actions = document.createElement("div");
@@ -374,7 +436,10 @@ async function streamResponse() {
 
     messages.push({ role: "assistant", content: finalText });
     addMessageActions(row, finalText, false);
+    const diagram = renderPossessionDiagram(parsePossession(finalText));
+    if (diagram) wrap.insertBefore(diagram, wrap.querySelector(".message-actions"));
     persistCurrentChat();
+    renderEntityChips();
     isStreaming = false;
     sendBtn.disabled = !userInput.value.trim();
   }
@@ -415,6 +480,7 @@ function init() {
   messagesEl.appendChild(emptyState);
   emptyState.style.display = "";
   renderChatHistory();
+  renderEntityChips();
 });
 
   userInput?.addEventListener("input", () => {
@@ -431,6 +497,29 @@ function init() {
 });
 
   sendBtn?.addEventListener("click", sendMessage);
+
+  syntaxHintsToggle?.addEventListener("click", () => {
+    syntaxHintsBody?.classList.toggle("open");
+  });
+
+  entityChipsEl?.addEventListener("click", (e) => {
+    const chip = e.target.closest(".entity-chip");
+    if (!chip || !userInput) return;
+    const entity = chip.dataset.entity;
+    if (!entity) return;
+    const start = userInput.selectionStart ?? userInput.value.length;
+    const end = userInput.selectionEnd ?? start;
+    const before = userInput.value.slice(0, start);
+    const after = userInput.value.slice(end);
+    const needsSpace = before.length > 0 && !(/\s$/).test(before);
+    const insert = (needsSpace ? " " : "") + entity;
+    userInput.value = before + insert + after;
+    userInput.selectionStart = userInput.selectionEnd = start + insert.length;
+    userInput.focus();
+    userInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  renderEntityChips();
 }
 
 if (document.readyState === "loading") {

@@ -320,6 +320,7 @@ body {
 .example-btn:nth-child(1) { animation-delay: 0.05s; }
 .example-btn:nth-child(2) { animation-delay: 0.1s; }
 .example-btn:nth-child(3) { animation-delay: 0.15s; }
+.example-btn:nth-child(4) { animation-delay: 0.2s; }
 
 .example-btn {
   background: var(--surface);
@@ -338,6 +339,116 @@ body {
   background: var(--surface-hover);
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+.syntax-hints {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.syntax-hints-toggle {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.syntax-hints-toggle:hover {
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+.syntax-hints-body {
+  display: none;
+  margin-top: 8px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.syntax-hints-body.open {
+  display: block;
+}
+
+.syntax-hints-body code {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--surface-hover);
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.entity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-bottom: 10px;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+  min-height: 32px;
+}
+
+.entity-chip {
+  padding: 5px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.entity-chip:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.possession-diagram {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.possession-diagram-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.possession-diagram-item .person {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.possession-diagram-item .arrow {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.possession-diagram-item .object {
+  color: var(--text);
 }
 
 /* Message rows */

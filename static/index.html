@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=4" />
+  <link rel="stylesheet" href="/static/style.css?v=5" />
 </head>
 <body>
   <div class="layout">
@@ -70,11 +70,23 @@
             <button class="example-btn" onclick="sendExample('Alice gives the ball to Bob.')">
               Alice gives the ball to Bob.
             </button>
+            <button class="example-btn" onclick="sendExample('What does Charlie have?')">
+              What does Charlie have?
+            </button>
+          </div>
+          <div class="syntax-hints">
+            <button type="button" class="syntax-hints-toggle" id="syntaxHintsToggle">Supported patterns</button>
+            <div class="syntax-hints-body" id="syntaxHintsBody">
+              <code>X has Y</code> · <code>X gives Y to Z</code> · <code>Who has Y?</code> · <code>What does X have?</code>
+            </div>
           </div>
         </div>
       </div>
 
       <div class="input-bar">
+        <div class="entity-chips" id="entityChips">
+          <!-- Populated by JS based on conversation -->
+        </div>
         <div class="input-wrapper">
           <textarea
             id="userInput"
