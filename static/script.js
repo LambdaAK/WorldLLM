@@ -78,13 +78,39 @@ function renderChatHistory() {
     .reverse()
     .map(
       (c) =>
-        `<button type="button" class="chat-history-item ${c.id === currentChatId ? "active" : ""}" data-id="${c.id}">${escapeHtml(c.title)}</button>`
+        `<div class="chat-history-item ${c.id === currentChatId ? "active" : ""}" data-id="${c.id}">
+          <button type="button" class="chat-history-title">${escapeHtml(c.title)}</button>
+          <button type="button" class="chat-history-delete" title="Delete chat" aria-label="Delete chat">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>`
     )
     .join("");
 
-  chatHistoryEl.querySelectorAll(".chat-history-item").forEach((btn) => {
-    btn.addEventListener("click", () => loadChat(btn.dataset.id));
+  chatHistoryEl.querySelectorAll(".chat-history-item").forEach((item) => {
+    const id = item.dataset.id;
+    item.querySelector(".chat-history-title").addEventListener("click", () => loadChat(id));
+    item.querySelector(".chat-history-delete").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteChat(id);
+    });
   });
+}
+
+function deleteChat(id) {
+  if (isStreaming) return;
+  const chats = loadChats().filter((c) => c.id !== id);
+  saveChats(chats);
+
+  if (currentChatId === id) {
+    currentChatId = null;
+    messages = [];
+    messagesEl.innerHTML = "";
+    messagesEl.appendChild(emptyState);
+    emptyState.style.display = "";
+  }
+
+  renderChatHistory();
 }
 
 function escapeHtml(s) {
