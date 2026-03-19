@@ -5,29 +5,37 @@
 }
 
 :root {
-  --bg: #212121;
-  --sidebar-bg: #171717;
-  --surface: #2f2f2f;
-  --surface-hover: #383838;
-  --border: #3a3a3a;
-  --text: #ececec;
-  --text-muted: #8e8ea0;
-  --text-dim: #6b6b7a;
-  --accent: #10a37f;
-  --accent-hover: #1ab38f;
-  --user-bubble: #2f2f2f;
-  --input-bg: #2f2f2f;
+  --bg: #1a1614;
+  --sidebar-bg: #120f0d;
+  --surface: #2c2622;
+  --surface-hover: #3d352f;
+  --border: #4a4038;
+  --text: #faf8f5;
+  --text-muted: #b8a99a;
+  --text-dim: #8b7d6e;
+  --accent: #ea580c;
+  --accent-hover: #f97316;
+  --accent-soft: rgba(234, 88, 12, 0.2);
+  --user-bubble: #2c2622;
+  --input-bg: #2c2622;
   --radius: 12px;
   --sidebar-width: 260px;
 }
 
 html, body {
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg);
   color: var(--text);
   font-size: 15px;
   line-height: 1.6;
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse 100% 60% at 50% -10%, rgba(234, 88, 12, 0.25) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(234, 88, 12, 0.08) 0%, transparent 50%),
+    var(--bg);
 }
 
 /* Layout */
@@ -47,6 +55,7 @@ html, body {
   justify-content: space-between;
   padding: 12px;
   border-right: 1px solid var(--border);
+  border-right-color: rgba(234, 88, 12, 0.2);
 }
 
 .sidebar-top {
@@ -72,6 +81,8 @@ html, body {
 
 .new-chat-btn:hover {
   background: var(--surface-hover);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .sidebar-bottom {
@@ -199,9 +210,11 @@ html, body {
 }
 
 .empty-state h1 {
-  font-size: 28px;
+  font-family: "Fraunces", serif;
+  font-size: 34px;
   font-weight: 600;
   color: var(--text);
+  letter-spacing: -0.02em;
 }
 
 .empty-state p {
@@ -219,6 +232,10 @@ html, body {
   max-width: 480px;
 }
 
+.example-btn:nth-child(1) { animation-delay: 0.05s; }
+.example-btn:nth-child(2) { animation-delay: 0.1s; }
+.example-btn:nth-child(3) { animation-delay: 0.15s; }
+
 .example-btn {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -228,12 +245,14 @@ html, body {
   padding: 10px 16px;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  animation: fadeIn 0.4s ease backwards;
 }
 
 .example-btn:hover {
   background: var(--surface-hover);
-  border-color: #555;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 
 /* Message rows */
@@ -244,7 +263,7 @@ html, body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -316,7 +335,8 @@ html, body {
 }
 
 .input-wrapper:focus-within {
-  border-color: #555;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 
 textarea#userInput {
@@ -349,13 +369,15 @@ textarea#userInput::placeholder {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.15s, opacity 0.15s;
+  transition: background 0.15s, opacity 0.15s, box-shadow 0.15s;
+  box-shadow: 0 0 12px rgba(234, 88, 12, 0.35);
 }
 
 .send-btn:disabled {
   background: var(--surface-hover);
-  opacity: 0.5;
+  opacity: 0.6;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .send-btn:not(:disabled):hover {
