@@ -1,45 +1,56 @@
 """
-FastAPI web UI for TinyGPT.
+FastAPI web UI + API gateway for TinyGPT.
 
-Usage:
-    python app.py
-    python app.py --checkpoint checkpoints/best.pt
-    python app.py --port 8000 --host 0.0.0.0
+This process handles:
+- request validation
+- enqueueing generation jobs into Redis
+- streaming worker output back to the browser over SSE
 
-Opens a browser chat interface at http://localhost:8000
+Inference runs in `worker.py`.
 """
 
 from __future__ import annotations
+
 import argparse
-import asyncio
+import glob
 import os
+import time
+import uuid
+
+import redis.asyncio as redis
 import torch
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from interact import (
-    load_model,
-    build_conversation_tokens,
-    list_checkpoints,
+from interact import build_conversation_tokens
+from redis_protocol import (
+    EVENT_DONE,
+    EVENT_ERROR,
+    EVENT_TOKEN,
+    REQUEST_QUEUE_KEY,
+    WORKER_STATS_KEY,
+    decode_event,
+    encode_request,
+    stream_channel,
 )
-from inference_scheduler import BatchScheduler
-from vocabulary import ID_TO_WORD, PAD_ID, SOS_ID, EOS_ID
+from vocabulary import EOS_ID, ID_TO_WORD, PAD_ID, SOS_ID
 
 _PUNCT_NO_SPACE = frozenset(".?,!")
 DEFAULT_CHECKPOINT = "checkpoints/best.pt"
 DEFAULT_MAX_TOKENS = 40
+DEFAULT_REDIS_URL = "redis://127.0.0.1:6379/0"
 
 app = FastAPI()
 
-# Global model state
-_model = None
-_config = None
-_device = None
-_checkpoint_path = None
-_scheduler = None
+_redis_client: redis.Redis | None = None
+_checkpoint_path: str | None = None
+_info_payload: dict = {}
+_redis_url = DEFAULT_REDIS_URL
+_request_queue_key = REQUEST_QUEUE_KEY
+_stream_idle_timeout_sec = 60.0
 
 
 class ChatRequest(BaseModel):
@@ -50,11 +61,7 @@ class ChatRequest(BaseModel):
 
 
 def _messages_to_turns(messages: list[dict]) -> tuple[list[tuple], str]:
-    """Convert [{role, content}] to (turns, current_msg).
-
-    turns is a list of (client_msg, output_msg) for completed exchanges.
-    current_msg is the last user message (not yet responded to).
-    """
+    """Convert [{role, content}] to (turns, current_msg)."""
     turns = []
     i = 0
     while i < len(messages) - 1:
@@ -63,16 +70,91 @@ def _messages_to_turns(messages: list[dict]) -> tuple[list[tuple], str]:
             i += 2
         else:
             i += 1
-    # Last message must be the current user message
     current_msg = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
     return turns, current_msg
 
 
 def _token_to_word(token_id: int):
-    """Convert a token ID to a displayable word. Returns None for special tokens."""
+    """Convert token ID to displayable word; hide special tokens."""
     if token_id in (PAD_ID, SOS_ID, EOS_ID):
         return None
     return ID_TO_WORD.get(token_id, "<unk>")
+
+
+def _resolve_checkpoint(checkpoint: str | None, checkpoint_dir: str) -> str:
+    if checkpoint and os.path.isfile(checkpoint):
+        return checkpoint
+    if os.path.isfile(DEFAULT_CHECKPOINT):
+        return DEFAULT_CHECKPOINT
+    if checkpoint:
+        raise SystemExit(f"Checkpoint not found: {checkpoint}")
+
+    pattern = os.path.join(checkpoint_dir, "*.pt")
+    candidates = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    if candidates:
+        return candidates[0]
+
+    raise SystemExit(
+        "No checkpoint found. Train a model first:\n"
+        "  python data_generator.py --train 300000 --val 2000 --outdir data\n"
+        "  python train.py\n"
+        "Then run API + worker."
+    )
+
+
+def _load_checkpoint_info(checkpoint_path: str) -> dict:
+    payload = {
+        "checkpoint": os.path.basename(checkpoint_path),
+        "epoch": "?",
+        "val_loss": "?",
+        "parameters": 0,
+        "device": "worker",
+    }
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    payload["epoch"] = checkpoint.get("epoch", "?")
+    val_loss = checkpoint.get("val_loss", "?")
+    if isinstance(val_loss, float):
+        val_loss = round(val_loss, 4)
+    payload["val_loss"] = val_loss
+    state_dict = checkpoint.get("model_state_dict")
+    if isinstance(state_dict, dict):
+        payload["parameters"] = int(sum(param.numel() for param in state_dict.values()))
+    return payload
+
+
+def _coerce_worker_stats(stats: dict) -> dict:
+    parsed = {}
+    for key, value in stats.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            lowered = value.lower()
+            if lowered.isdigit():
+                parsed[key] = int(lowered)
+                continue
+            try:
+                parsed[key] = float(value)
+                continue
+            except ValueError:
+                parsed[key] = value
+                continue
+        parsed[key] = value
+    return parsed
+
+
+@app.on_event("startup")
+async def startup():
+    global _redis_client
+    _redis_client = redis.from_url(_redis_url, decode_responses=True)
+    await _redis_client.ping()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _redis_client
+    if _redis_client is not None:
+        await _redis_client.aclose()
+        _redis_client = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -83,10 +165,8 @@ async def index():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    if _scheduler is None:
-        return JSONResponse({"error": "Scheduler not ready"}, status_code=503)
-    if not _scheduler.is_running:
-        await _scheduler.start()
+    if _redis_client is None:
+        return JSONResponse({"error": "Redis client not ready"}, status_code=503)
 
     if not req.messages or req.messages[-1]["role"] != "user":
         return JSONResponse({"error": "Last message must be from user"}, status_code=400)
@@ -96,36 +176,71 @@ async def chat(req: ChatRequest):
         return JSONResponse({"error": "Empty message"}, status_code=400)
 
     token_ids = build_conversation_tokens(turns, current_msg)
+    request_id = uuid.uuid4().hex
+    channel = stream_channel(request_id)
+
+    pubsub = _redis_client.pubsub()
+    await pubsub.subscribe(channel)
+
+    request_payload = {
+        "request_id": request_id,
+        "token_ids": token_ids,
+        "temperature": float(req.temperature),
+        "top_k": int(req.top_k) if req.top_k is not None else None,
+        "max_tokens": max(1, int(req.max_tokens)),
+        "submitted_at_ms": int(time.time() * 1000),
+    }
 
     try:
-        generation = await _scheduler.submit(
-            token_ids,
-            temperature=req.temperature,
-            top_k=req.top_k,
-            max_tokens=req.max_tokens,
-        )
-    except RuntimeError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=503)
+        await _redis_client.rpush(_request_queue_key, encode_request(request_payload))
+    except Exception:
+        await pubsub.unsubscribe(channel)
+        await pubsub.aclose()
+        return JSONResponse({"error": "Failed to enqueue request"}, status_code=503)
 
     async def event_stream():
         first = True
-        completed = False
+        last_event_at = time.monotonic()
         try:
             while True:
-                token_id = await asyncio.wait_for(generation.queue.get(), timeout=60.0)
-                if token_id is None:
-                    completed = True
-                    break
-                word = _token_to_word(token_id)
-                if word is None:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message is None:
+                    if time.monotonic() - last_event_at > _stream_idle_timeout_sec:
+                        yield "data: [ERROR] generation timeout\n\n"
+                        break
                     continue
-                # Prepend a space unless it's the first token or punctuation
-                prefix = "" if first or word in _PUNCT_NO_SPACE else " "
-                yield f"data: {prefix}{word}\n\n"
-                first = False
+
+                last_event_at = time.monotonic()
+                raw_data = message.get("data")
+                if not isinstance(raw_data, str):
+                    continue
+
+                try:
+                    event = decode_event(raw_data)
+                except Exception:
+                    continue
+
+                event_type = event.get("type")
+                if event_type == EVENT_TOKEN:
+                    token_id = event.get("token_id")
+                    if token_id is None:
+                        continue
+                    word = _token_to_word(int(token_id))
+                    if word is None:
+                        continue
+                    prefix = "" if first or word in _PUNCT_NO_SPACE else " "
+                    yield f"data: {prefix}{word}\n\n"
+                    first = False
+                elif event_type == EVENT_ERROR:
+                    message = str(event.get("message", "worker error")).replace("\n", " ").strip()
+                    yield f"data: [ERROR] {message}\n\n"
+                elif event_type == EVENT_DONE:
+                    break
         finally:
-            if not completed:
-                generation.cancelled = True
+            try:
+                await pubsub.unsubscribe(channel)
+            finally:
+                await pubsub.aclose()
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -133,86 +248,70 @@ async def chat(req: ChatRequest):
 
 @app.get("/info")
 async def info():
-    if _model is None:
-        return JSONResponse({"error": "Model not loaded"}, status_code=503)
-    checkpoint = torch.load(_checkpoint_path, map_location="cpu", weights_only=False)
-    epoch = checkpoint.get("epoch", "?")
-    val_loss = checkpoint.get("val_loss", "?")
-    if isinstance(val_loss, float):
-        val_loss = round(val_loss, 4)
-    payload = {
-        "checkpoint": os.path.basename(_checkpoint_path),
-        "epoch": epoch,
-        "val_loss": val_loss,
-        "parameters": _model.count_parameters(),
-        "device": str(_device),
-    }
-    if _scheduler is not None:
-        payload["batching"] = await _scheduler.snapshot()
+    payload = dict(_info_payload)
+    if _redis_client is None:
+        payload["redis"] = {"connected": False}
+        return payload
+
+    try:
+        queue_length = await _redis_client.llen(_request_queue_key)
+        worker_stats_raw = await _redis_client.hgetall(WORKER_STATS_KEY)
+        payload["redis"] = {
+            "connected": True,
+            "url": _redis_url,
+            "request_queue_key": _request_queue_key,
+            "pending_requests": queue_length,
+            "worker": _coerce_worker_stats(worker_stats_raw),
+        }
+    except Exception as exc:
+        payload["redis"] = {"connected": False, "error": str(exc)}
     return payload
 
 
-@app.on_event("shutdown")
-async def stop_scheduler():
-    if _scheduler is not None:
-        await _scheduler.stop()
-
-
 def main():
-    global _model, _config, _device, _checkpoint_path, _scheduler
+    global _checkpoint_path, _info_payload, _redis_url, _request_queue_key, _stream_idle_timeout_sec
 
-    parser = argparse.ArgumentParser(description="TinyGPT FastAPI Web UI")
+    parser = argparse.ArgumentParser(description="TinyGPT FastAPI API gateway")
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
-    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--batch_timeout_ms", type=int, default=25,
-                        help="Micro-batch collection window in milliseconds")
-    parser.add_argument("--max_batch_size", type=int, default=8,
-                        help="Maximum requests per inference batch")
+    parser.add_argument(
+        "--redis_url",
+        type=str,
+        default=os.getenv("REDIS_URL", DEFAULT_REDIS_URL),
+        help="Redis URL, e.g. redis://127.0.0.1:6379/0",
+    )
+    parser.add_argument(
+        "--request_queue_key",
+        type=str,
+        default=REQUEST_QUEUE_KEY,
+        help="Redis list key used as the shared inference queue",
+    )
+    parser.add_argument(
+        "--stream_idle_timeout_sec",
+        type=float,
+        default=60.0,
+        help="Stop SSE stream if worker is idle for this many seconds",
+    )
     args = parser.parse_args()
 
-    if args.device == "auto":
-        if torch.cuda.is_available():
-            _device = torch.device("cuda")
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            _device = torch.device("mps")
-        else:
-            _device = torch.device("cpu")
-    else:
-        _device = torch.device(args.device)
+    _checkpoint_path = _resolve_checkpoint(args.checkpoint, args.checkpoint_dir)
+    _info_payload = _load_checkpoint_info(_checkpoint_path)
+    _redis_url = args.redis_url
+    _request_queue_key = args.request_queue_key
+    _stream_idle_timeout_sec = max(5.0, float(args.stream_idle_timeout_sec))
 
-    checkpoint_path = args.checkpoint or DEFAULT_CHECKPOINT
-    if not os.path.isfile(checkpoint_path):
-        checkpoints = list_checkpoints(args.checkpoint_dir)
-        if checkpoints:
-            checkpoint_path = checkpoints[0][0]
-        else:
-            raise SystemExit(
-                "No checkpoint found. Train a model first:\n"
-                "  python data_generator.py --train 300000 --val 2000 --outdir data\n"
-                "  python train.py\n"
-                "Then run: python app.py"
-            )
-
-    _checkpoint_path = checkpoint_path
-    _model, _config = load_model(checkpoint_path, _device)
-    _scheduler = BatchScheduler(
-        _model,
-        _config,
-        _device,
-        batch_timeout_ms=args.batch_timeout_ms,
-        max_batch_size=args.max_batch_size,
-    )
-
-    print(f"Loaded {checkpoint_path} on {_device}")
-    print(f"Batching enabled: timeout={args.batch_timeout_ms}ms, max_batch_size={args.max_batch_size}")
+    print(f"API using checkpoint metadata: {_checkpoint_path}")
+    print(f"Redis URL: {_redis_url}")
+    print(f"Request queue key: {_request_queue_key}")
     print(f"Open http://{args.host}:{args.port} in your browser")
 
-    # Mount static files after startup
-    app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
-
+    app.mount(
+        "/static",
+        StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")),
+        name="static",
+    )
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

@@ -7,7 +7,7 @@ A small decoder-only transformer trained from scratch to track object possession
 ### 1. Install dependencies
 
 ```bash
-pip install torch>=2.0
+pip install -r requirements.txt
 ```
 
 ### 2. Generate training data
@@ -48,6 +48,37 @@ python interact.py --checkpoint checkpoints/best.pt --temperature 0.5 --no-color
 ```bash
 python run_examples.py   # full 22-test suite
 python test_model.py     # quick smoke test
+```
+
+## Redis Serving Mode (API + Worker)
+
+Run the web app in production-style mode with a Redis queue and a separate inference worker.
+
+### 1. Start Redis (Homebrew)
+
+```bash
+brew services start redis
+redis-cli ping
+```
+
+### 2. Start the worker
+
+```bash
+python worker.py --redis_url redis://127.0.0.1:6379/0
+```
+
+### 3. Start the API/web server
+
+```bash
+python app.py --host 0.0.0.0 --port 8000 --redis_url redis://127.0.0.1:6379/0
+```
+
+Open `http://localhost:8000`.
+
+### Optional: Docker Compose
+
+```bash
+docker compose up --build
 ```
 
 ## Example conversation
