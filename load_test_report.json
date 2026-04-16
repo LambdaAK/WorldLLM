@@ -1,0 +1,26 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "users": 10,
+  "requests_per_user": 10,
+  "duration_sec": 4.616969584,
+  "planned_requests": 100,
+  "successful_requests": 100,
+  "failed_requests": 0,
+  "throughput_rps": 21.659228673835685,
+  "token_throughput_client": 89.66920670967973,
+  "latency_ms": {
+    "avg": 394.91992577999997,
+    "p50": 318.4300414999997,
+    "p95": 1025.7098726000002,
+    "p99": 1292.2305416600013,
+    "min": 91.56412499999999,
+    "max": 1434.1387909999996
+  },
+  "worker": {
+    "requests_delta": 100.0,
+    "batches_delta": 14.0,
+    "avg_batch_size": 7.142857142857143,
+    "tokens_delta": 414.0,
+    "avg_queue_wait_ms": 450.07
+  }
+}

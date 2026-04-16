@@ -81,6 +81,14 @@ Open `http://localhost:8000`.
 docker compose up --build
 ```
 
+### Load test (100 concurrent users)
+
+```bash
+python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 100 --requests-per-user 100
+```
+
+This reports latency percentiles, throughput, and average batch size from worker stats.
+
 ## Example conversation
 
 ```
