@@ -15,7 +15,7 @@ import asyncio
 import os
 import torch
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -23,13 +23,14 @@ from pydantic import BaseModel
 from interact import (
     load_model,
     build_conversation_tokens,
-    generate_response,
     list_checkpoints,
 )
-from vocabulary import detokenize, ID_TO_WORD, PAD_ID, SOS_ID, EOS_ID
+from inference_scheduler import BatchScheduler
+from vocabulary import ID_TO_WORD, PAD_ID, SOS_ID, EOS_ID
 
 _PUNCT_NO_SPACE = frozenset(".?,!")
 DEFAULT_CHECKPOINT = "checkpoints/best.pt"
+DEFAULT_MAX_TOKENS = 40
 
 app = FastAPI()
 
@@ -38,12 +39,14 @@ _model = None
 _config = None
 _device = None
 _checkpoint_path = None
+_scheduler = None
 
 
 class ChatRequest(BaseModel):
     messages: list[dict]  # [{role: "user"|"assistant", content: str}]
     temperature: float = 0.1
     top_k: int = 5
+    max_tokens: int = DEFAULT_MAX_TOKENS
 
 
 def _messages_to_turns(messages: list[dict]) -> tuple[list[tuple], str]:
@@ -80,6 +83,11 @@ async def index():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    if _scheduler is None:
+        return JSONResponse({"error": "Scheduler not ready"}, status_code=503)
+    if not _scheduler.is_running:
+        await _scheduler.start()
+
     if not req.messages or req.messages[-1]["role"] != "user":
         return JSONResponse({"error": "Last message must be from user"}, status_code=400)
 
@@ -89,38 +97,35 @@ async def chat(req: ChatRequest):
 
     token_ids = build_conversation_tokens(turns, current_msg)
 
-    # Use a queue to bridge the sync generate_response callback with async SSE
-    queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
-
-    def on_token(token_id: int):
-        word = _token_to_word(token_id)
-        if word is not None:
-            loop.call_soon_threadsafe(queue.put_nowait, word)
-
-    async def run_generation():
-        await asyncio.to_thread(
-            generate_response,
-            _model, token_ids, _config, _device,
-            req.temperature, req.top_k, 40,
-            on_token,
+    try:
+        generation = await _scheduler.submit(
+            token_ids,
+            temperature=req.temperature,
+            top_k=req.top_k,
+            max_tokens=req.max_tokens,
         )
-        loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
 
     async def event_stream():
-        task = asyncio.create_task(run_generation())
         first = True
+        completed = False
         try:
             while True:
-                word = await queue.get()
-                if word is None:
+                token_id = await asyncio.wait_for(generation.queue.get(), timeout=60.0)
+                if token_id is None:
+                    completed = True
                     break
+                word = _token_to_word(token_id)
+                if word is None:
+                    continue
                 # Prepend a space unless it's the first token or punctuation
                 prefix = "" if first or word in _PUNCT_NO_SPACE else " "
                 yield f"data: {prefix}{word}\n\n"
                 first = False
         finally:
-            task.cancel()
+            if not completed:
+                generation.cancelled = True
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -135,17 +140,26 @@ async def info():
     val_loss = checkpoint.get("val_loss", "?")
     if isinstance(val_loss, float):
         val_loss = round(val_loss, 4)
-    return {
+    payload = {
         "checkpoint": os.path.basename(_checkpoint_path),
         "epoch": epoch,
         "val_loss": val_loss,
         "parameters": _model.count_parameters(),
         "device": str(_device),
     }
+    if _scheduler is not None:
+        payload["batching"] = await _scheduler.snapshot()
+    return payload
+
+
+@app.on_event("shutdown")
+async def stop_scheduler():
+    if _scheduler is not None:
+        await _scheduler.stop()
 
 
 def main():
-    global _model, _config, _device, _checkpoint_path
+    global _model, _config, _device, _checkpoint_path, _scheduler
 
     parser = argparse.ArgumentParser(description="TinyGPT FastAPI Web UI")
     parser.add_argument("--checkpoint", type=str, default=None)
@@ -153,6 +167,10 @@ def main():
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--batch_timeout_ms", type=int, default=25,
+                        help="Micro-batch collection window in milliseconds")
+    parser.add_argument("--max_batch_size", type=int, default=8,
+                        help="Maximum requests per inference batch")
     args = parser.parse_args()
 
     if args.device == "auto":
@@ -180,7 +198,16 @@ def main():
 
     _checkpoint_path = checkpoint_path
     _model, _config = load_model(checkpoint_path, _device)
+    _scheduler = BatchScheduler(
+        _model,
+        _config,
+        _device,
+        batch_timeout_ms=args.batch_timeout_ms,
+        max_batch_size=args.max_batch_size,
+    )
+
     print(f"Loaded {checkpoint_path} on {_device}")
+    print(f"Batching enabled: timeout={args.batch_timeout_ms}ms, max_batch_size={args.max_batch_size}")
     print(f"Open http://{args.host}:{args.port} in your browser")
 
     # Mount static files after startup

@@ -386,8 +386,9 @@ async function streamResponse() {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
+    let streamDone = false;
 
-    while (true) {
+    while (!streamDone) {
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -399,7 +400,10 @@ async function streamResponse() {
         const line = part.trim();
         if (!line.startsWith("data: ")) continue;
         const token = line.slice(6);
-        if (token === "[DONE]") break;
+        if (token === "[DONE]") {
+          streamDone = true;
+          break;
+        }
 
         responseText += token;
         loading.remove();
@@ -437,7 +441,8 @@ async function streamResponse() {
     messages.push({ role: "assistant", content: finalText });
     addMessageActions(row, finalText, false);
     const diagram = renderPossessionDiagram(parsePossession(finalText));
-    if (diagram) wrap.insertBefore(diagram, wrap.querySelector(".message-actions"));
+    const wrap = row.querySelector(".assistant-message-wrap");
+    if (diagram && wrap) wrap.insertBefore(diagram, wrap.querySelector(".message-actions"));
     persistCurrentChat();
     renderEntityChips();
     isStreaming = false;
