@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tinygpt-config
+  namespace: tinygpt
+data:
+  REDIS_URL: redis://tinygpt-redis:6379/0

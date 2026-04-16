@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tinygpt-api
+  namespace: tinygpt
+  labels:
+    app: tinygpt-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tinygpt-api
+  template:
+    metadata:
+      labels:
+        app: tinygpt-api
+    spec:
+      containers:
+        - name: api
+          image: tinygpt:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - app.py
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --checkpoint
+            - /app/checkpoints/best.pt
+          envFrom:
+            - configMapRef:
+                name: tinygpt-config
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /info
+              port: http
+            initialDelaySeconds: 8
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /info
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

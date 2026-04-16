@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tinygpt-worker
+  namespace: tinygpt
+  labels:
+    app: tinygpt-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tinygpt-worker
+  template:
+    metadata:
+      labels:
+        app: tinygpt-worker
+    spec:
+      containers:
+        - name: worker
+          image: tinygpt:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - worker.py
+            - --checkpoint
+            - /app/checkpoints/best.pt
+            - --device
+            - cpu
+            - --batch_timeout_ms
+            - "25"
+            - --max_batch_size
+            - "8"
+          envFrom:
+            - configMapRef:
+                name: tinygpt-config
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi

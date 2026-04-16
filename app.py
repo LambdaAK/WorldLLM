@@ -16,6 +16,7 @@ import glob
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
 import torch
@@ -43,14 +44,28 @@ DEFAULT_CHECKPOINT = "checkpoints/best.pt"
 DEFAULT_MAX_TOKENS = 40
 DEFAULT_REDIS_URL = "redis://127.0.0.1:6379/0"
 
-app = FastAPI()
-
 _redis_client: redis.Redis | None = None
 _checkpoint_path: str | None = None
 _info_payload: dict = {}
 _redis_url = DEFAULT_REDIS_URL
 _request_queue_key = REQUEST_QUEUE_KEY
 _stream_idle_timeout_sec = 60.0
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global _redis_client
+    _redis_client = redis.from_url(_redis_url, decode_responses=True)
+    await _redis_client.ping()
+    try:
+        yield
+    finally:
+        if _redis_client is not None:
+            await _redis_client.aclose()
+            _redis_client = None
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 class ChatRequest(BaseModel):
@@ -140,21 +155,6 @@ def _coerce_worker_stats(stats: dict) -> dict:
                 continue
         parsed[key] = value
     return parsed
-
-
-@app.on_event("startup")
-async def startup():
-    global _redis_client
-    _redis_client = redis.from_url(_redis_url, decode_responses=True)
-    await _redis_client.ping()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    global _redis_client
-    if _redis_client is not None:
-        await _redis_client.aclose()
-        _redis_client = None
 
 
 @app.get("/", response_class=HTMLResponse)

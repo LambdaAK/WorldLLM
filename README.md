@@ -81,6 +81,61 @@ Open `http://localhost:8000`.
 docker compose up --build
 ```
 
+## Kubernetes (Minikube)
+
+### 1. Build and load the image into Minikube
+
+```bash
+cd /Users/alex/Desktop/TinyGPT
+docker build -t tinygpt:latest .
+minikube image load tinygpt:latest
+```
+
+### 2. Deploy core services (Redis + API + worker)
+
+```bash
+kubectl apply -k k8s/
+kubectl get pods -n tinygpt
+kubectl get svc -n tinygpt
+```
+
+### 3. Access the API
+
+Use port-forward:
+
+```bash
+kubectl port-forward -n tinygpt svc/tinygpt-api 8000:8000
+```
+
+Then open `http://127.0.0.1:8000`.
+
+### 4. Scale workers
+
+```bash
+kubectl scale -n tinygpt deploy/tinygpt-worker --replicas=2
+```
+
+### 5. Optional ingress
+
+```bash
+minikube addons enable ingress
+kubectl apply -f k8s/optional/ingress.yaml
+```
+
+Add this hosts entry:
+
+```text
+$(minikube ip) tinygpt.local
+```
+
+Then open `http://tinygpt.local`.
+
+### 6. Teardown
+
+```bash
+kubectl delete -k k8s/
+```
+
 ### Load test (100 concurrent users)
 
 ```bash
