@@ -3,7 +3,10 @@ kind: Kustomization
 
 resources:
   - namespace.yaml
+  - secret.yaml
   - configmap.yaml
+  - postgres-statefulset.yaml
+  - postgres-service.yaml
   - redis-deployment.yaml
   - redis-service.yaml
   - api-deployment.yaml

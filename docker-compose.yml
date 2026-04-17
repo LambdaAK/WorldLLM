@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tinygpt
+      POSTGRES_USER: tinygpt
+      POSTGRES_PASSWORD: tinygpt
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tinygpt -d tinygpt"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   redis:
     image: redis:7-alpine
     ports:
@@ -7,8 +23,14 @@ services:
   api:
     build: .
     command: python app.py --host 0.0.0.0 --port 8000 --redis_url redis://redis:6379/0
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://tinygpt:tinygpt@postgres:5432/tinygpt
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"
 
@@ -17,3 +39,6 @@ services:
     command: python worker.py --redis_url redis://redis:6379/0
     depends_on:
       - redis
+
+volumes:
+  postgres_data:

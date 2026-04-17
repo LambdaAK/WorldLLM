@@ -7,15 +7,16 @@ A small decoder-only transformer trained from scratch to track object possession
 This project can be run in four different ways:
 
 1. Train + CLI chat (`interact.py`): run the model directly in your terminal with no Redis or web server; best for quick model iteration.
-2. Local web serving stack (FastAPI + Redis + worker): run API, queue, and worker as separate local processes to test streaming and batching behavior.
-3. Docker Compose (API + Redis + worker containers): run the same serving stack as containers for reproducible local setup.
-4. Kubernetes on Minikube (namespace + deployments + services): run the stack with Kubernetes orchestration for scaling, rollouts, and production-style workflow.
+2. Local web serving stack (FastAPI + Redis + worker + PostgreSQL): run API, queue, worker, and database as separate local services.
+3. Docker Compose (API + Redis + worker + PostgreSQL containers): run the full serving stack with reproducible containerized setup.
+4. Kubernetes on Minikube (namespace + deployments + services + StatefulSet): run the full stack with orchestration, scaling, and persistent DB volume.
 
 ## Prerequisites
 
 - Python 3.11
 - A trained checkpoint at `checkpoints/best.pt` for any inference mode (web/API/worker)
-- Redis (only for serving modes 2/3/4)
+- Redis (serving modes 2/3/4)
+- PostgreSQL (mode 2, unless using Docker/Kubernetes for modes 3/4)
 - Docker Desktop (for modes 3/4)
 - Minikube + kubectl (for mode 4)
 
@@ -78,11 +79,26 @@ Optional cleanup (generated training data + checkpoints):
 rm -rf data checkpoints
 ```
 
-## 2) Local Web App (FastAPI + Redis + Worker)
+## 2) Local Web App (FastAPI + Redis + Worker + PostgreSQL)
 
 Run this when you want the browser UI (`/`) and streaming responses.
 
-### Terminal 1: Start Redis
+### Terminal 1: Start PostgreSQL
+
+```bash
+brew services start postgresql@16
+```
+
+### Terminal 2: Create database + user (first time only)
+
+```bash
+psql postgres <<'SQL'
+CREATE USER tinygpt WITH PASSWORD 'tinygpt';
+CREATE DATABASE tinygpt OWNER tinygpt;
+SQL
+```
+
+### Terminal 3: Start Redis
 
 ```bash
 brew services start redis
@@ -91,15 +107,16 @@ redis-cli ping
 
 Expected output: `PONG`
 
-### Terminal 2: Start worker
+### Terminal 4: Start worker
 
 ```bash
 python worker.py --redis_url redis://127.0.0.1:6379/0
 ```
 
-### Terminal 3: Start API/web server
+### Terminal 5: Start API/web server
 
 ```bash
+DATABASE_URL=postgresql+asyncpg://tinygpt:tinygpt@127.0.0.1:5432/tinygpt \
 python app.py --host 0.0.0.0 --port 8000 --redis_url redis://127.0.0.1:6379/0
 ```
 
@@ -120,9 +137,15 @@ python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 10 --reques
 brew services stop redis
 ```
 
+Optional: stop local PostgreSQL
+
+```bash
+brew services stop postgresql@16
+```
+
 ## 3) Docker Compose
 
-This runs Redis, API, and worker together in containers.
+This runs PostgreSQL, Redis, API, and worker together in containers.
 
 ```bash
 cd /Users/alex/Desktop/TinyGPT
@@ -182,6 +205,7 @@ kubectl get svc -n tinygpt
 ```
 
 Wait until `tinygpt-api`, `tinygpt-worker`, and `tinygpt-redis` are `1/1 Running`.
+You should also see `tinygpt-postgres-0` running.
 
 ### Access API
 
@@ -255,6 +279,27 @@ python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 100 --reque
 
 This reports latency percentiles, throughput, and average batch size from worker stats.
 
+## Database Logging + Metrics
+
+Authentication is removed. The database is used for inference logging and metrics only.
+
+When `DATABASE_URL` is set, each `/chat` request is written to `request_logs` with:
+
+- `request_id`
+- `status` (`ok`, `timeout`, `worker_error`)
+- generation settings (`temperature`, `top_k`, `max_tokens`)
+- `token_events`
+- `latency_ms`
+- `created_at`
+
+`GET /info` also includes an aggregated `database.request_logs` summary (totals, status counts, averages, latest timestamp).
+
+Quick check:
+
+```bash
+curl -s http://127.0.0.1:8000/info
+```
+
 ## Troubleshooting
 
 ### `No checkpoint found...`
@@ -291,6 +336,14 @@ curl http://127.0.0.1:8000/info
 ```
 
 If on Kubernetes, make sure `kubectl port-forward -n tinygpt svc/tinygpt-api 8000:8000` is running.
+
+### API says database is not configured
+
+Set `DATABASE_URL` before starting API, for example:
+
+```bash
+export DATABASE_URL=postgresql+asyncpg://tinygpt:tinygpt@127.0.0.1:5432/tinygpt
+```
 
 ## Full Cleanup (Everything)
 

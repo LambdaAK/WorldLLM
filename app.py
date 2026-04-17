@@ -5,6 +5,7 @@ This process handles:
 - request validation
 - enqueueing generation jobs into Redis
 - streaming worker output back to the browser over SSE
+- optional database-backed request logging and metrics
 
 Inference runs in `worker.py`.
 """
@@ -13,10 +14,12 @@ from __future__ import annotations
 
 import argparse
 import glob
+import logging
 import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 import redis.asyncio as redis
 import torch
@@ -25,7 +28,15 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import func, select
 
+from db import (
+    RequestLog,
+    close_db,
+    get_database_url,
+    get_session_factory,
+    init_db,
+)
 from interact import build_conversation_tokens
 from redis_protocol import (
     EVENT_DONE,
@@ -46,26 +57,15 @@ DEFAULT_REDIS_URL = "redis://127.0.0.1:6379/0"
 
 _redis_client: redis.Redis | None = None
 _checkpoint_path: str | None = None
-_info_payload: dict = {}
+_info_payload: dict[str, Any] = {}
 _redis_url = DEFAULT_REDIS_URL
 _request_queue_key = REQUEST_QUEUE_KEY
 _stream_idle_timeout_sec = 60.0
 
+_db_enabled = False
+_db_url_display = ""
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    global _redis_client
-    _redis_client = redis.from_url(_redis_url, decode_responses=True)
-    await _redis_client.ping()
-    try:
-        yield
-    finally:
-        if _redis_client is not None:
-            await _redis_client.aclose()
-            _redis_client = None
-
-
-app = FastAPI(lifespan=lifespan)
+logger = logging.getLogger("tinygpt.api")
 
 
 class ChatRequest(BaseModel):
@@ -89,7 +89,7 @@ def _messages_to_turns(messages: list[dict]) -> tuple[list[tuple], str]:
     return turns, current_msg
 
 
-def _token_to_word(token_id: int):
+def _token_to_word(token_id: int) -> str | None:
     """Convert token ID to displayable word; hide special tokens."""
     if token_id in (PAD_ID, SOS_ID, EOS_ID):
         return None
@@ -117,8 +117,8 @@ def _resolve_checkpoint(checkpoint: str | None, checkpoint_dir: str) -> str:
     )
 
 
-def _load_checkpoint_info(checkpoint_path: str) -> dict:
-    payload = {
+def _load_checkpoint_info(checkpoint_path: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "checkpoint": os.path.basename(checkpoint_path),
         "epoch": "?",
         "val_loss": "?",
@@ -138,7 +138,7 @@ def _load_checkpoint_info(checkpoint_path: str) -> dict:
 
 
 def _coerce_worker_stats(stats: dict) -> dict:
-    parsed = {}
+    parsed: dict[str, Any] = {}
     for key, value in stats.items():
         if value is None:
             continue
@@ -155,6 +155,98 @@ def _coerce_worker_stats(stats: dict) -> dict:
                 continue
         parsed[key] = value
     return parsed
+
+
+def _safe_top_k(top_k: int | None) -> int:
+    if top_k is None:
+        return 0
+    return max(0, int(top_k))
+
+
+async def _database_metrics() -> dict[str, Any]:
+    if not _db_enabled:
+        return {
+            "enabled": False,
+            "url": _db_url_display,
+            "request_logs": None,
+        }
+
+    metrics: dict[str, Any] = {
+        "enabled": True,
+        "url": _db_url_display,
+        "request_logs": {
+            "total": 0,
+            "ok": 0,
+            "timeout": 0,
+            "worker_error": 0,
+            "avg_latency_ms": 0.0,
+            "avg_token_events": 0.0,
+            "last_request_at": None,
+        },
+    }
+
+    try:
+        async with get_session_factory()() as db_session:
+            total = (await db_session.execute(select(func.count(RequestLog.id)))).scalar_one() or 0
+            ok = (
+                await db_session.execute(
+                    select(func.count(RequestLog.id)).where(RequestLog.status == "ok")
+                )
+            ).scalar_one() or 0
+            timeout = (
+                await db_session.execute(
+                    select(func.count(RequestLog.id)).where(RequestLog.status == "timeout")
+                )
+            ).scalar_one() or 0
+            worker_error = (
+                await db_session.execute(
+                    select(func.count(RequestLog.id)).where(RequestLog.status == "worker_error")
+                )
+            ).scalar_one() or 0
+            avg_latency = (await db_session.execute(select(func.avg(RequestLog.latency_ms)))).scalar_one()
+            avg_tokens = (await db_session.execute(select(func.avg(RequestLog.token_events)))).scalar_one()
+            last_request_at = (
+                await db_session.execute(
+                    select(RequestLog.created_at).order_by(RequestLog.created_at.desc()).limit(1)
+                )
+            ).scalar_one_or_none()
+
+        metrics["request_logs"] = {
+            "total": int(total),
+            "ok": int(ok),
+            "timeout": int(timeout),
+            "worker_error": int(worker_error),
+            "avg_latency_ms": round(float(avg_latency or 0.0), 2),
+            "avg_token_events": round(float(avg_tokens or 0.0), 2),
+            "last_request_at": last_request_at.isoformat() if last_request_at is not None else None,
+        }
+    except Exception as exc:
+        metrics["request_logs"] = {"error": str(exc)}
+
+    return metrics
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global _redis_client, _db_enabled, _db_url_display
+
+    _redis_client = redis.from_url(_redis_url, decode_responses=True)
+    await _redis_client.ping()
+
+    _db_enabled = await init_db(os.getenv("DATABASE_URL"))
+    db_url = get_database_url()
+    _db_url_display = db_url or "disabled"
+
+    try:
+        yield
+    finally:
+        await close_db()
+        if _redis_client is not None:
+            await _redis_client.aclose()
+            _redis_client = None
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -201,11 +293,16 @@ async def chat(req: ChatRequest):
     async def event_stream():
         first = True
         last_event_at = time.monotonic()
+        request_started = time.perf_counter()
+        token_events = 0
+        status_text = "ok"
+
         try:
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message is None:
                     if time.monotonic() - last_event_at > _stream_idle_timeout_sec:
+                        status_text = "timeout"
                         yield "data: [ERROR] generation timeout\n\n"
                         break
                     continue
@@ -229,11 +326,14 @@ async def chat(req: ChatRequest):
                     if word is None:
                         continue
                     prefix = "" if first or word in _PUNCT_NO_SPACE else " "
-                    yield f"data: {prefix}{word}\n\n"
+                    chunk = f"{prefix}{word}"
+                    token_events += 1
+                    yield f"data: {chunk}\n\n"
                     first = False
                 elif event_type == EVENT_ERROR:
-                    message = str(event.get("message", "worker error")).replace("\n", " ").strip()
-                    yield f"data: [ERROR] {message}\n\n"
+                    status_text = "worker_error"
+                    error_message = str(event.get("message", "worker error")).replace("\n", " ").strip()
+                    yield f"data: [ERROR] {error_message}\n\n"
                 elif event_type == EVENT_DONE:
                     break
         finally:
@@ -241,6 +341,26 @@ async def chat(req: ChatRequest):
                 await pubsub.unsubscribe(channel)
             finally:
                 await pubsub.aclose()
+
+            if _db_enabled:
+                latency_ms = (time.perf_counter() - request_started) * 1000.0
+                try:
+                    async with get_session_factory()() as db_session:
+                        db_session.add(
+                            RequestLog(
+                                request_id=request_id,
+                                status=status_text,
+                                temperature=float(req.temperature),
+                                top_k=_safe_top_k(req.top_k),
+                                max_tokens=max(1, int(req.max_tokens)),
+                                token_events=token_events,
+                                latency_ms=round(latency_ms, 2),
+                            )
+                        )
+                        await db_session.commit()
+                except Exception:
+                    logger.exception("Failed to persist request log")
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -249,6 +369,8 @@ async def chat(req: ChatRequest):
 @app.get("/info")
 async def info():
     payload = dict(_info_payload)
+    payload["database"] = await _database_metrics()
+
     if _redis_client is None:
         payload["redis"] = {"connected": False}
         return payload
@@ -269,7 +391,8 @@ async def info():
 
 
 def main():
-    global _checkpoint_path, _info_payload, _redis_url, _request_queue_key, _stream_idle_timeout_sec
+    global _checkpoint_path, _info_payload, _redis_url, _request_queue_key
+    global _stream_idle_timeout_sec
 
     parser = argparse.ArgumentParser(description="TinyGPT FastAPI API gateway")
     parser.add_argument("--checkpoint", type=str, default=None)

@@ -4,10 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TinyGPT</title>
+  <meta name="color-scheme" content="light dark" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=5" />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css?v=9" />
 </head>
 <body>
   <div class="layout">
@@ -20,6 +21,7 @@
           </svg>
           New chat
         </button>
+        <p class="history-label">Recent</p>
         <div class="chat-history" id="chatHistory">
           <!-- Populated by JS -->
         </div>
@@ -48,13 +50,31 @@
         </div>
 
         <div class="model-info" id="modelInfo">
-          <span class="model-name">TinyGPT</span>
+          <span class="model-dot" aria-hidden="true"></span>
+          <div class="model-meta">
+            <span class="model-name">best.pt</span>
+            <span class="model-stats">epoch -- · loss -- · -- params</span>
+          </div>
         </div>
       </div>
     </aside>
 
     <!-- Main chat area -->
     <main class="chat-area">
+      <header class="chat-header">
+        <div class="status-left">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="top-brand">TinyGPT</span>
+          <span class="top-pill">object tracking</span>
+        </div>
+        <div class="status-right">
+          <span class="loss-pill" id="lossPill">loss --</span>
+          <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle theme" aria-pressed="false">
+            <span class="theme-toggle-dot" aria-hidden="true"></span>
+            <span class="theme-toggle-label" id="themeToggleLabel">Dark</span>
+          </button>
+        </div>
+      </header>
       <div class="messages" id="messages">
         <div class="empty-state" id="emptyState">
           <h1>TinyGPT</h1>
@@ -67,12 +87,6 @@
             <button class="example-btn" onclick="sendExample('Who has the ball?')">
               Who has the ball?
             </button>
-            <button class="example-btn" onclick="sendExample('Alice gives the ball to Bob.')">
-              Alice gives the ball to Bob.
-            </button>
-            <button class="example-btn" onclick="sendExample('What does Charlie have?')">
-              What does Charlie have?
-            </button>
           </div>
           <div class="syntax-hints">
             <button type="button" class="syntax-hints-toggle" id="syntaxHintsToggle">Supported patterns</button>
@@ -84,8 +98,11 @@
       </div>
 
       <div class="input-bar">
-        <div class="entity-chips" id="entityChips">
-          <!-- Populated by JS based on conversation -->
+        <div class="chip-zone">
+          <p class="chip-zone-title">Known vocabulary</p>
+          <div class="entity-chips" id="entityChips">
+            <!-- Populated by JS based on conversation -->
+          </div>
         </div>
         <div class="input-wrapper">
           <textarea
@@ -107,6 +124,6 @@
     </main>
   </div>
 
-  <script src="/static/script.js"></script>
+  <script src="/static/script.js?v=7"></script>
 </body>
 </html>

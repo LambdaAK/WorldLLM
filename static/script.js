@@ -5,6 +5,7 @@ let currentChatId = null;
 
 const STORAGE_KEY = "tinygpt-chats";
 const MAX_CHATS = 50;
+const THEME_STORAGE_KEY = "tinygpt-theme";
 
 const KNOWN_PEOPLE = ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry"];
 const KNOWN_OBJECTS = ["ball", "key", "clock", "book", "hat", "ring", "lamp", "pen", "cup", "apple", "orange", "coin"];
@@ -28,6 +29,9 @@ const chatHistoryEl = document.getElementById("chatHistory");
 const syntaxHintsToggle = document.getElementById("syntaxHintsToggle");
 const syntaxHintsBody = document.getElementById("syntaxHintsBody");
 const entityChipsEl = document.getElementById("entityChips");
+const themeToggle = document.getElementById("themeToggle");
+const themeToggleLabel = document.getElementById("themeToggleLabel");
+const lossPill = document.getElementById("lossPill");
 
 // --- localStorage helpers ---
 function loadChats() {
@@ -49,6 +53,38 @@ function generateId() {
   return "chat_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
 }
 
+function getSystemTheme() {
+  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
+}
+
+function applyTheme(theme, persist = true) {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+
+  if (themeToggleLabel) {
+    themeToggleLabel.textContent = next === "dark" ? "Dark" : "Light";
+  }
+  if (themeToggle) {
+    themeToggle.setAttribute("aria-pressed", String(next === "dark"));
+    themeToggle.setAttribute("title", `Switch to ${next === "dark" ? "light" : "dark"} mode`);
+  }
+
+  if (!persist) return;
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next);
+  } catch (_) {}
+}
+
+function initTheme() {
+  let theme = getSystemTheme();
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "dark" || saved === "light") theme = saved;
+  } catch (_) {}
+
+  applyTheme(theme, false);
+}
+
 function getChatTitle(msgs) {
   const first = msgs.find((m) => m.role === "user");
   if (!first) return "New chat";
@@ -58,6 +94,7 @@ function getChatTitle(msgs) {
 
 function persistCurrentChat() {
   if (messages.length === 0) return;
+
   const chats = loadChats();
   const title = getChatTitle(messages);
   const payload = { id: currentChatId || generateId(), title, messages: [...messages], createdAt: Date.now() };
@@ -73,12 +110,14 @@ function persistCurrentChat() {
     currentChatId = payload.id;
     chats.push(payload);
   }
+
   saveChats(chats);
   renderChatHistory();
 }
 
 function renderChatHistory() {
   if (!chatHistoryEl) return;
+
   const chats = loadChats();
   chatHistoryEl.innerHTML = chats
     .slice()
@@ -96,25 +135,30 @@ function renderChatHistory() {
 
   chatHistoryEl.querySelectorAll(".chat-history-item").forEach((item) => {
     const id = item.dataset.id;
-    item.querySelector(".chat-history-title").addEventListener("click", () => loadChat(id));
-    item.querySelector(".chat-history-delete").addEventListener("click", (e) => {
+    item.querySelector(".chat-history-title")?.addEventListener("click", () => {
+      void loadChat(id);
+    });
+    item.querySelector(".chat-history-delete")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      deleteChat(id);
+      void deleteChat(id);
     });
   });
 }
 
-function deleteChat(id) {
+async function deleteChat(id) {
   if (isStreaming) return;
+
   const chats = loadChats().filter((c) => c.id !== id);
   saveChats(chats);
 
   if (currentChatId === id) {
     currentChatId = null;
     messages = [];
-    messagesEl.innerHTML = "";
-    messagesEl.appendChild(emptyState);
-    emptyState.style.display = "";
+    if (messagesEl && emptyState) {
+      messagesEl.innerHTML = "";
+      messagesEl.appendChild(emptyState);
+      emptyState.style.display = "";
+    }
   }
 
   renderChatHistory();
@@ -145,7 +189,10 @@ function renderEntityChips() {
   const rest = [...KNOWN_PEOPLE, ...KNOWN_OBJECTS].filter((x) => !combined.includes(x));
   const toShow = [...combined, ...rest].slice(0, 16);
   entityChipsEl.innerHTML = toShow
-    .map((e) => `<button type="button" class="entity-chip" data-entity="${escapeHtml(e)}">${escapeHtml(e)}</button>`)
+    .map((e) => {
+      const kind = KNOWN_PEOPLE.includes(e) ? "person" : (KNOWN_OBJECTS.includes(e) ? "object" : "");
+      return `<button type="button" class="entity-chip ${kind}" data-entity="${escapeHtml(e)}">${escapeHtml(e)}</button>`;
+    })
     .join("");
 }
 
@@ -177,8 +224,9 @@ function renderPossessionDiagram(pairs) {
   return div;
 }
 
-function loadChat(id) {
+async function loadChat(id) {
   if (isStreaming) return;
+
   const chats = loadChats();
   const chat = chats.find((c) => c.id === id);
   if (!chat) return;
@@ -186,16 +234,21 @@ function loadChat(id) {
   currentChatId = chat.id;
   messages = [...chat.messages];
 
+  if (!messagesEl || !emptyState) return;
   messagesEl.innerHTML = "";
-  emptyState.style.display = "none";
+  emptyState.style.display = messages.length === 0 ? "" : "none";
 
-  messages.forEach((m) => {
-    if (m.role === "user") {
-      appendUserBubble(m.content, false);
-    } else {
-      appendAssistantBubble(m.content, false);
-    }
-  });
+  if (messages.length === 0) {
+    messagesEl.appendChild(emptyState);
+  } else {
+    messages.forEach((m) => {
+      if (m.role === "user") {
+        appendUserBubble(m.content, false);
+      } else {
+        appendAssistantBubble(m.content, false);
+      }
+    });
+  }
 
   scrollToBottom();
   renderChatHistory();
@@ -240,8 +293,8 @@ function appendAssistantBubble(text, withActions = true) {
         Regenerate
       </button>
     `;
-    actions.querySelector(".copy-btn").addEventListener("click", (e) => copyToClipboard(text, e.currentTarget));
-    actions.querySelector(".regenerate-btn").addEventListener("click", () => regenerateFrom(row));
+    actions.querySelector(".copy-btn")?.addEventListener("click", (e) => copyToClipboard(text, e.currentTarget));
+    actions.querySelector(".regenerate-btn")?.addEventListener("click", () => regenerateFrom(row));
     wrap.appendChild(actions);
   }
 
@@ -252,6 +305,8 @@ function appendAssistantBubble(text, withActions = true) {
 
 function addMessageActions(row, text, regenerateOnly = false) {
   const wrap = row.querySelector(".assistant-message-wrap");
+  if (!wrap) return;
+
   const actions = document.createElement("div");
   actions.className = "message-actions";
   actions.innerHTML = regenerateOnly
@@ -271,9 +326,10 @@ function addMessageActions(row, text, regenerateOnly = false) {
         Regenerate
       </button>
     `;
+
   const copyBtn = actions.querySelector(".copy-btn");
   if (copyBtn) copyBtn.addEventListener("click", (e) => copyToClipboard(text, e.currentTarget));
-  actions.querySelector(".regenerate-btn").addEventListener("click", () => regenerateFrom(row));
+  actions.querySelector(".regenerate-btn")?.addEventListener("click", () => regenerateFrom(row));
   wrap.appendChild(actions);
 }
 
@@ -282,13 +338,16 @@ function copyToClipboard(text, btn) {
     if (btn) {
       const orig = btn.innerHTML;
       btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Copied!';
-      setTimeout(() => { btn.innerHTML = orig; }, 1500);
+      setTimeout(() => {
+        btn.innerHTML = orig;
+      }, 1500);
     }
   });
 }
 
 function regenerateFrom(assistantRow) {
   if (isStreaming) return;
+
   const rows = [...messagesEl.querySelectorAll(".message-row")];
   const idx = rows.indexOf(assistantRow);
   if (idx < 0) return;
@@ -358,6 +417,9 @@ function sendExample(text) {
 
 async function streamResponse() {
   isStreaming = true;
+  document.body.classList.add("is-streaming");
+  sendBtn.classList.add("is-busy");
+
   const { row, content, loading } = appendAssistantRow();
   let responseText = "";
   let isError = false;
@@ -369,7 +431,7 @@ async function streamResponse() {
       body: JSON.stringify({
         messages,
         temperature: parseFloat(tempSlider.value),
-        top_k: parseInt(topkSlider.value),
+        top_k: parseInt(topkSlider.value, 10),
       }),
     });
 
@@ -378,12 +440,19 @@ async function streamResponse() {
       loading.remove();
       content.textContent = "[Error: " + (err.error || resp.statusText) + "]";
       content.style.color = "#e55";
-      addMessageActions(row, content.textContent, true);
       isError = true;
       return;
     }
 
-    const reader = resp.body.getReader();
+    const reader = resp.body?.getReader();
+    if (!reader) {
+      loading.remove();
+      content.textContent = "[Error: empty stream]";
+      content.style.color = "#e55";
+      isError = true;
+      return;
+    }
+
     const decoder = new TextDecoder();
     let buf = "";
     let streamDone = false;
@@ -394,13 +463,24 @@ async function streamResponse() {
 
       buf += decoder.decode(value, { stream: true });
       const parts = buf.split("\n\n");
-      buf = parts.pop();
+      buf = parts.pop() || "";
 
       for (const part of parts) {
         const line = part.trim();
         if (!line.startsWith("data: ")) continue;
         const token = line.slice(6);
+
         if (token === "[DONE]") {
+          streamDone = true;
+          break;
+        }
+
+        if (token.startsWith("[ERROR]")) {
+          responseText = token;
+          isError = true;
+          loading.remove();
+          content.textContent = token;
+          content.style.color = "#e55";
           streamDone = true;
           break;
         }
@@ -415,19 +495,25 @@ async function streamResponse() {
         scrollToBottom();
       }
     }
-  } catch (err) {
+  } catch (_) {
     loading.remove();
     content.textContent = "[Connection error]";
     content.style.color = "#e55";
-    addMessageActions(row, content.textContent, true);
     isError = true;
     return;
   } finally {
+    document.body.classList.remove("is-streaming");
+    sendBtn.classList.remove("is-busy");
+
     if (isError) {
+      loading.remove();
+      content.querySelectorAll(".cursor").forEach((c) => c.remove());
+      addMessageActions(row, content.textContent || "[Error]", true);
       isStreaming = false;
       sendBtn.disabled = !userInput.value.trim();
       return;
     }
+
     loading.remove();
     const finalText = responseText || "...";
     if (!responseText) {
@@ -440,9 +526,13 @@ async function streamResponse() {
 
     messages.push({ role: "assistant", content: finalText });
     addMessageActions(row, finalText, false);
+
     const diagram = renderPossessionDiagram(parsePossession(finalText));
     const wrap = row.querySelector(".assistant-message-wrap");
-    if (diagram && wrap) wrap.insertBefore(diagram, wrap.querySelector(".message-actions"));
+    if (diagram && wrap) {
+      wrap.insertBefore(diagram, wrap.querySelector(".message-actions"));
+    }
+
     persistCurrentChat();
     renderEntityChips();
     isStreaming = false;
@@ -451,55 +541,84 @@ async function streamResponse() {
 }
 
 // --- Init ---
-function init() {
+async function init() {
   if (!messagesEl || !userInput || !sendBtn) return;
+
+  initTheme();
   renderChatHistory();
 
   fetch("/info")
-  .then((r) => r.json())
-  .then((data) => {
-    if (data.checkpoint && modelInfo) {
-      modelInfo.innerHTML = `
-        <span class="model-name">${data.checkpoint}</span>
-        <span style="color:var(--text-dim);font-size:11px;display:block">
-          epoch ${data.epoch} · loss ${data.val_loss} · ${(data.parameters / 1000).toFixed(0)}K params
-        </span>`;
-    }
-  })
-  .catch(() => {});
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.checkpoint && modelInfo) {
+        const epoch = data.epoch ?? "--";
+        const valLoss = data.val_loss ?? "--";
+        const params = typeof data.parameters === "number"
+          ? `${(data.parameters / 1000).toFixed(1)}K params`
+          : "-- params";
+
+        modelInfo.innerHTML = `
+          <span class="model-dot" aria-hidden="true"></span>
+          <div class="model-meta">
+            <span class="model-name">${escapeHtml(String(data.checkpoint))}</span>
+            <span class="model-stats">epoch ${escapeHtml(String(epoch))} · loss ${escapeHtml(String(valLoss))} · ${escapeHtml(params)}</span>
+          </div>`;
+      }
+
+      if (lossPill) {
+        const valLoss = data?.val_loss;
+        lossPill.textContent = valLoss !== undefined && valLoss !== null && valLoss !== "?"
+          ? `loss ${valLoss}`
+          : "loss --";
+      }
+    })
+    .catch(() => {});
 
   settingsToggle?.addEventListener("click", () => {
-  const open = settingsBody.classList.toggle("open");
-  chevron.classList.toggle("open", open);
-});
+    const open = settingsBody.classList.toggle("open");
+    chevron.classList.toggle("open", open);
+  });
 
-  tempSlider?.addEventListener("input", () => { tempVal.textContent = tempSlider.value; });
-  topkSlider?.addEventListener("input", () => { topkVal.textContent = topkSlider.value; });
+  themeToggle?.addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+    applyTheme(current === "dark" ? "light" : "dark", true);
+  });
+
+  tempSlider?.addEventListener("input", () => {
+    tempVal.textContent = tempSlider.value;
+  });
+
+  topkSlider?.addEventListener("input", () => {
+    topkVal.textContent = topkSlider.value;
+  });
 
   newChatBtn?.addEventListener("click", () => {
-  if (isStreaming) return;
-  persistCurrentChat();
-  currentChatId = null;
-  messages = [];
-  messagesEl.innerHTML = "";
-  messagesEl.appendChild(emptyState);
-  emptyState.style.display = "";
-  renderChatHistory();
-  renderEntityChips();
-});
+    if (isStreaming) return;
+
+    persistCurrentChat();
+    currentChatId = null;
+    messages = [];
+
+    messagesEl.innerHTML = "";
+    messagesEl.appendChild(emptyState);
+    emptyState.style.display = "";
+
+    renderChatHistory();
+    renderEntityChips();
+  });
 
   userInput?.addEventListener("input", () => {
-  userInput.style.height = "auto";
-  userInput.style.height = Math.min(userInput.scrollHeight, 200) + "px";
-  sendBtn.disabled = !userInput.value.trim() || isStreaming;
-});
+    userInput.style.height = "auto";
+    userInput.style.height = Math.min(userInput.scrollHeight, 200) + "px";
+    sendBtn.disabled = !userInput.value.trim() || isStreaming;
+  });
 
   userInput?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    if (!sendBtn.disabled) sendMessage();
-  }
-});
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!sendBtn.disabled) sendMessage();
+    }
+  });
 
   sendBtn?.addEventListener("click", sendMessage);
 
@@ -510,14 +629,17 @@ function init() {
   entityChipsEl?.addEventListener("click", (e) => {
     const chip = e.target.closest(".entity-chip");
     if (!chip || !userInput) return;
+
     const entity = chip.dataset.entity;
     if (!entity) return;
+
     const start = userInput.selectionStart ?? userInput.value.length;
     const end = userInput.selectionEnd ?? start;
     const before = userInput.value.slice(0, start);
     const after = userInput.value.slice(end);
-    const needsSpace = before.length > 0 && !(/\s$/).test(before);
+    const needsSpace = before.length > 0 && !/\s$/.test(before);
     const insert = (needsSpace ? " " : "") + entity;
+
     userInput.value = before + insert + after;
     userInput.selectionStart = userInput.selectionEnd = start + insert.length;
     userInput.focus();
@@ -528,7 +650,9 @@ function init() {
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => { try { init(); } catch (e) { console.error("TinyGPT init error:", e); } });
+  document.addEventListener("DOMContentLoaded", () => {
+    void init().catch((e) => console.error("TinyGPT init error:", e));
+  });
 } else {
-  try { init(); } catch (e) { console.error("TinyGPT init error:", e); }
+  void init().catch((e) => console.error("TinyGPT init error:", e));
 }
