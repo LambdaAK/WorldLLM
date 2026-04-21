@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tinygpt-grafana-dashboard
+  namespace: tinygpt
+data:
+  tinygpt-overview.json: |
+    {
+      "id": null,
+      "uid": "tinygpt-overview",
+      "title": "TinyGPT Inference Overview",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Queue Depth",
+          "gridPos": {"x": 0, "y": 0, "w": 8, "h": 8},
+          "targets": [
+            {"expr": "tinygpt_queue_depth", "legendFormat": "pending"}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Batch Size",
+          "gridPos": {"x": 8, "y": 0, "w": 8, "h": 8},
+          "targets": [
+            {"expr": "tinygpt_worker_avg_batch_size", "legendFormat": "avg"},
+            {"expr": "tinygpt_worker_last_batch_size", "legendFormat": "last"}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Request Latency p95 (s)",
+          "gridPos": {"x": 16, "y": 0, "w": 8, "h": 8},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(tinygpt_api_request_latency_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Token Throughput (tokens/s)",
+          "gridPos": {"x": 0, "y": 8, "w": 8, "h": 8},
+          "targets": [
+            {"expr": "tinygpt_worker_tokens_per_second", "legendFormat": "worker estimate"},
+            {"expr": "rate(tinygpt_api_streamed_token_events_total[1m])", "legendFormat": "api streamed"}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "API Error Rate",
+          "gridPos": {"x": 8, "y": 8, "w": 8, "h": 8},
+          "targets": [
+            {"expr": "tinygpt_api_error_rate", "legendFormat": "process error rate"}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Request Throughput by Status (req/s)",
+          "gridPos": {"x": 16, "y": 8, "w": 8, "h": 8},
+          "targets": [
+            {"expr": "sum(rate(tinygpt_api_requests_total[1m])) by (status)", "legendFormat": "{{status}}"}
+          ]
+        }
+      ]
+    }

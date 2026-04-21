@@ -97,11 +97,18 @@ def parse_worker_stats(info: dict[str, Any]) -> dict[str, float]:
         except (TypeError, ValueError):
             return 0.0
 
+    total_requests = as_float("total_requests")
+    total_queue_wait_raw = worker.get("total_queue_wait_ms")
+
     return {
-        "total_requests": as_float("total_requests"),
+        "total_requests": total_requests,
         "total_batches": as_float("total_batches"),
         "total_streamed_tokens": as_float("total_streamed_tokens"),
-        "avg_queue_wait_ms": as_float("avg_queue_wait_ms"),
+        "avg_queue_wait_ms": (
+            as_float("total_queue_wait_ms") / total_requests
+            if total_queue_wait_raw is not None and total_requests > 0
+            else as_float("avg_queue_wait_ms")
+        ),
     }
 
 

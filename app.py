@@ -6,6 +6,7 @@ This process handles:
 - enqueueing generation jobs into Redis
 - streaming worker output back to the browser over SSE
 - optional database-backed request logging and metrics
+- exposing Prometheus metrics for queueing, batching, latency, and errors
 
 Inference runs in `worker.py`.
 """
@@ -25,8 +26,9 @@ import redis.asyncio as redis
 import torch
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -66,6 +68,67 @@ _db_enabled = False
 _db_url_display = ""
 
 logger = logging.getLogger("tinygpt.api")
+
+REQUESTS_TOTAL = Counter(
+    "tinygpt_api_requests_total",
+    "Total chat requests observed by API, partitioned by final status",
+    ["status"],
+)
+REQUEST_ERRORS_TOTAL = Counter(
+    "tinygpt_api_request_errors_total",
+    "Total chat requests that ended with timeout or worker_error",
+)
+REQUEST_LATENCY_SECONDS = Histogram(
+    "tinygpt_api_request_latency_seconds",
+    "End-to-end /chat request latency from enqueue to stream finish",
+    buckets=(0.05, 0.1, 0.2, 0.4, 0.8, 1.2, 2.0, 3.0, 5.0, 8.0, 12.0),
+)
+STREAMED_TOKEN_EVENTS_TOTAL = Counter(
+    "tinygpt_api_streamed_token_events_total",
+    "Total token events streamed to clients by API",
+)
+
+REQUEST_QUEUE_DEPTH = Gauge(
+    "tinygpt_queue_depth",
+    "Pending inference requests in Redis queue",
+)
+WORKER_LAST_BATCH_SIZE = Gauge(
+    "tinygpt_worker_last_batch_size",
+    "Last processed dynamic batch size from worker stats",
+)
+WORKER_AVG_BATCH_SIZE = Gauge(
+    "tinygpt_worker_avg_batch_size",
+    "Average dynamic batch size (total_requests / total_batches)",
+)
+WORKER_AVG_QUEUE_WAIT_MS = Gauge(
+    "tinygpt_worker_avg_queue_wait_ms",
+    "Average queue wait in milliseconds from worker stats",
+)
+WORKER_TOTAL_REQUESTS = Gauge(
+    "tinygpt_worker_total_requests",
+    "Cumulative requests processed by worker(s)",
+)
+WORKER_TOTAL_BATCHES = Gauge(
+    "tinygpt_worker_total_batches",
+    "Cumulative batches processed by worker(s)",
+)
+WORKER_TOTAL_STREAMED_TOKENS = Gauge(
+    "tinygpt_worker_total_streamed_tokens",
+    "Cumulative streamed tokens emitted by worker(s)",
+)
+WORKER_TOKEN_THROUGHPUT = Gauge(
+    "tinygpt_worker_tokens_per_second",
+    "Estimated worker token throughput based on total_streamed_tokens delta over scrape interval",
+)
+API_ERROR_RATE = Gauge(
+    "tinygpt_api_error_rate",
+    "Observed error rate (timeouts + worker errors) since API process start",
+)
+
+_requests_seen = 0
+_request_errors_seen = 0
+_last_worker_token_total = 0.0
+_last_worker_token_sample_time = 0.0
 
 
 class ChatRequest(BaseModel):
@@ -157,10 +220,87 @@ def _coerce_worker_stats(stats: dict) -> dict:
     return parsed
 
 
+def _normalize_worker_stats(stats: dict) -> dict[str, Any]:
+    normalized = _coerce_worker_stats(stats)
+
+    total_requests = float(normalized.get("total_requests", 0) or 0)
+    total_queue_wait_ms = normalized.get("total_queue_wait_ms")
+    if total_queue_wait_ms is None:
+        fallback_avg = float(normalized.get("avg_queue_wait_ms", 0) or 0)
+        total_queue_wait_ms = fallback_avg * total_requests if total_requests > 0 else 0.0
+    total_queue_wait_ms = float(total_queue_wait_ms)
+    avg_queue_wait_ms = total_queue_wait_ms / total_requests if total_requests > 0 else float(
+        normalized.get("avg_queue_wait_ms", 0) or 0
+    )
+
+    normalized["total_queue_wait_ms"] = round(total_queue_wait_ms, 2)
+    normalized["avg_queue_wait_ms"] = round(avg_queue_wait_ms, 2)
+    return normalized
+
+
 def _safe_top_k(top_k: int | None) -> int:
     if top_k is None:
         return 0
     return max(0, int(top_k))
+
+
+def _record_request_metrics(status_text: str, latency_ms: float, token_events: int) -> None:
+    global _requests_seen, _request_errors_seen
+
+    status = status_text if status_text in {"ok", "timeout", "worker_error"} else "unknown"
+    REQUESTS_TOTAL.labels(status=status).inc()
+    REQUEST_LATENCY_SECONDS.observe(max(0.0, latency_ms) / 1000.0)
+    if token_events > 0:
+        STREAMED_TOKEN_EVENTS_TOTAL.inc(token_events)
+
+    _requests_seen += 1
+    if status != "ok":
+        _request_errors_seen += 1
+        REQUEST_ERRORS_TOTAL.inc()
+
+    API_ERROR_RATE.set(_request_errors_seen / _requests_seen if _requests_seen > 0 else 0.0)
+
+
+async def _refresh_runtime_metrics_from_redis(*, update_throughput: bool) -> None:
+    global _last_worker_token_total, _last_worker_token_sample_time
+
+    if _redis_client is None:
+        return
+
+    try:
+        queue_length = await _redis_client.llen(_request_queue_key)
+        REQUEST_QUEUE_DEPTH.set(float(queue_length))
+
+        worker_stats_raw = await _redis_client.hgetall(WORKER_STATS_KEY)
+        worker_stats = _normalize_worker_stats(worker_stats_raw)
+
+        total_requests = float(worker_stats.get("total_requests", 0) or 0)
+        total_batches = float(worker_stats.get("total_batches", 0) or 0)
+        total_streamed_tokens = float(worker_stats.get("total_streamed_tokens", 0) or 0)
+        last_batch_size = float(worker_stats.get("last_batch_size", 0) or 0)
+        avg_queue_wait_ms = float(worker_stats.get("avg_queue_wait_ms", 0) or 0)
+
+        WORKER_TOTAL_REQUESTS.set(total_requests)
+        WORKER_TOTAL_BATCHES.set(total_batches)
+        WORKER_TOTAL_STREAMED_TOKENS.set(total_streamed_tokens)
+        WORKER_LAST_BATCH_SIZE.set(last_batch_size)
+        WORKER_AVG_QUEUE_WAIT_MS.set(avg_queue_wait_ms)
+        WORKER_AVG_BATCH_SIZE.set(total_requests / total_batches if total_batches > 0 else 0.0)
+
+        if update_throughput:
+            now = time.perf_counter()
+            if _last_worker_token_sample_time > 0 and now > _last_worker_token_sample_time:
+                token_delta = total_streamed_tokens - _last_worker_token_total
+                elapsed = now - _last_worker_token_sample_time
+                if token_delta >= 0 and elapsed > 0:
+                    WORKER_TOKEN_THROUGHPUT.set(token_delta / elapsed)
+                else:
+                    WORKER_TOKEN_THROUGHPUT.set(0.0)
+
+            _last_worker_token_total = total_streamed_tokens
+            _last_worker_token_sample_time = now
+    except Exception:
+        logger.debug("Failed to refresh runtime metrics", exc_info=True)
 
 
 async def _database_metrics() -> dict[str, Any]:
@@ -342,8 +482,10 @@ async def chat(req: ChatRequest):
             finally:
                 await pubsub.aclose()
 
+            latency_ms = (time.perf_counter() - request_started) * 1000.0
+            _record_request_metrics(status_text, latency_ms, token_events)
+
             if _db_enabled:
-                latency_ms = (time.perf_counter() - request_started) * 1000.0
                 try:
                     async with get_session_factory()() as db_session:
                         db_session.add(
@@ -370,6 +512,7 @@ async def chat(req: ChatRequest):
 async def info():
     payload = dict(_info_payload)
     payload["database"] = await _database_metrics()
+    await _refresh_runtime_metrics_from_redis(update_throughput=False)
 
     if _redis_client is None:
         payload["redis"] = {"connected": False}
@@ -383,11 +526,17 @@ async def info():
             "url": _redis_url,
             "request_queue_key": _request_queue_key,
             "pending_requests": queue_length,
-            "worker": _coerce_worker_stats(worker_stats_raw),
+            "worker": _normalize_worker_stats(worker_stats_raw),
         }
     except Exception as exc:
         payload["redis"] = {"connected": False, "error": str(exc)}
     return payload
+
+
+@app.get("/metrics")
+async def metrics():
+    await _refresh_runtime_metrics_from_redis(update_throughput=True)
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 def main():

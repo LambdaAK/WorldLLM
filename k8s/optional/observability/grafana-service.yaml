@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tinygpt-grafana
+  namespace: tinygpt
+spec:
+  selector:
+    app: tinygpt-grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

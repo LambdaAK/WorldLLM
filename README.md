@@ -11,6 +11,54 @@ This project can be run in four different ways:
 3. Docker Compose (API + Redis + worker + PostgreSQL containers): run the full serving stack with reproducible containerized setup.
 4. Kubernetes on Minikube (namespace + deployments + services + StatefulSet): run the full stack with orchestration, scaling, and persistent DB volume.
 
+## One Command Launcher
+
+You can manage all serving modes with one command:
+
+```bash
+cd /Users/alex/Desktop/TinyGPT
+./tinygpt <up|down|status> --mode <local|docker|k8s> [options]
+```
+
+Common examples:
+
+```bash
+# Local stack (brew services + worker + api)
+./tinygpt up --mode local
+
+# Docker stack (recommended default for reliability)
+./tinygpt up --mode docker
+
+# Kubernetes stack (minikube + image build + deploy + port-forward)
+./tinygpt up --mode k8s
+
+# Kubernetes with monitoring
+./tinygpt up --mode k8s --with-observability
+
+# Check status
+./tinygpt status --mode local
+./tinygpt status --mode docker
+./tinygpt status --mode k8s
+
+# Tear down
+./tinygpt down --mode local --stop-brew-services
+./tinygpt down --mode docker
+./tinygpt down --mode k8s --with-observability --stop-minikube
+```
+
+For full flags:
+
+```bash
+./tinygpt --help
+python scripts/stack.py --help
+```
+
+Notes:
+
+- If `postgresql@16` is not installed, local mode auto-detects another installed Homebrew PostgreSQL version and uses that.
+- If no Homebrew PostgreSQL formula is installed, local mode still starts and runs with DB disabled automatically.
+- K8s mode auto-retries Minikube startup with lower memory profiles if the initial memory setting fails.
+
 ## Prerequisites
 
 - Python 3.11
@@ -122,6 +170,12 @@ python app.py --host 0.0.0.0 --port 8000 --redis_url redis://127.0.0.1:6379/0
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
+Metrics endpoint:
+
+```bash
+curl -s http://127.0.0.1:8000/metrics | head
+```
+
 ### Optional load test (local stack)
 
 ```bash
@@ -202,6 +256,7 @@ eval $(minikube docker-env -u)
 kubectl apply -k k8s/
 kubectl get pods -n tinygpt
 kubectl get svc -n tinygpt
+kubectl get hpa -n tinygpt
 ```
 
 Wait until `tinygpt-api`, `tinygpt-worker`, and `tinygpt-redis` are `1/1 Running`.
@@ -219,6 +274,45 @@ Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 ```bash
 kubectl scale -n tinygpt deploy/tinygpt-worker --replicas=2
+```
+
+### HPA autoscaling (worker)
+
+`k8s/worker-hpa.yaml` is included by default. It scales `tinygpt-worker` from 1 to 6 replicas based on CPU and memory utilization.
+
+If you are using Minikube, ensure the metrics server is enabled:
+
+```bash
+minikube addons enable metrics-server
+kubectl get apiservices | grep metrics
+kubectl get hpa -n tinygpt
+```
+
+### Optional observability stack (Prometheus + Grafana)
+
+Deploy optional monitoring resources:
+
+```bash
+kubectl apply -k k8s/optional/observability
+kubectl get pods -n tinygpt | grep tinygpt-
+```
+
+Port-forward dashboards:
+
+```bash
+kubectl port-forward -n tinygpt svc/tinygpt-prometheus 9090:9090
+kubectl port-forward -n tinygpt svc/tinygpt-grafana 3000:3000
+```
+
+Then open:
+
+- Prometheus: [http://127.0.0.1:9090](http://127.0.0.1:9090)
+- Grafana: [http://127.0.0.1:3000](http://127.0.0.1:3000) (`admin` / `admin`)
+
+Remove optional observability resources:
+
+```bash
+kubectl delete -k k8s/optional/observability
 ```
 
 ### Optional ingress
@@ -278,6 +372,31 @@ python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 100 --reque
 ```
 
 This reports latency percentiles, throughput, and average batch size from worker stats.
+
+## Performance Regression Gate (Item 5)
+
+Use the generated JSON report with a threshold gate:
+
+```bash
+python scripts/load_test.py \
+  --base-url http://127.0.0.1:8000 \
+  --users 10 \
+  --requests-per-user 10 \
+  --json-out artifacts/load_test_report.json
+
+python scripts/check_regression.py \
+  --report artifacts/load_test_report.json \
+  --thresholds benchmarks/ci_thresholds.json
+```
+
+CI workflow: `.github/workflows/load-regression.yml`
+
+- Starts Redis service
+- Builds a lightweight CI checkpoint if no trained artifact is available
+- Starts `worker.py` + `app.py`
+- Runs load test
+- Enforces thresholds in `benchmarks/ci_thresholds.json`
+- Uploads logs + report as workflow artifacts
 
 ## Database Logging + Metrics
 

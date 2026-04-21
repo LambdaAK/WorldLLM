@@ -128,25 +128,35 @@ def _collect_batch(
     return requests
 
 
-def _update_stats(rds: redis.Redis, stats: dict):
-    average_queue_wait = (
-        stats["total_queue_wait_ms"] / stats["total_requests"]
-        if stats["total_requests"] > 0
-        else 0.0
-    )
+def _update_stats(rds: redis.Redis, stats: dict, published_stats: dict):
+    delta_requests = int(stats["total_requests"] - published_stats["total_requests"])
+    delta_batches = int(stats["total_batches"] - published_stats["total_batches"])
+    delta_tokens = int(stats["total_streamed_tokens"] - published_stats["total_streamed_tokens"])
+    delta_queue_wait_ms = max(0.0, float(stats["total_queue_wait_ms"] - published_stats["total_queue_wait_ms"]))
+
+    if delta_requests > 0:
+        rds.hincrby(WORKER_STATS_KEY, "total_requests", delta_requests)
+    if delta_batches > 0:
+        rds.hincrby(WORKER_STATS_KEY, "total_batches", delta_batches)
+    if delta_tokens > 0:
+        rds.hincrby(WORKER_STATS_KEY, "total_streamed_tokens", delta_tokens)
+    if delta_queue_wait_ms > 0.0:
+        rds.hincrbyfloat(WORKER_STATS_KEY, "total_queue_wait_ms", delta_queue_wait_ms)
+
     rds.hset(
         WORKER_STATS_KEY,
         mapping={
             "status": "running",
-            "total_requests": stats["total_requests"],
-            "total_batches": stats["total_batches"],
             "last_batch_size": stats["last_batch_size"],
-            "total_streamed_tokens": stats["total_streamed_tokens"],
-            "avg_queue_wait_ms": round(average_queue_wait, 2),
             "last_error": stats["last_error"],
             "last_heartbeat_ms": int(time.time() * 1000),
         },
     )
+
+    published_stats["total_requests"] = stats["total_requests"]
+    published_stats["total_batches"] = stats["total_batches"]
+    published_stats["total_streamed_tokens"] = stats["total_streamed_tokens"]
+    published_stats["total_queue_wait_ms"] = stats["total_queue_wait_ms"]
 
 
 def _process_batch(
@@ -264,7 +274,13 @@ def main():
         "total_queue_wait_ms": 0.0,
         "last_error": "",
     }
-    _update_stats(redis_client, stats)
+    published_stats = {
+        "total_requests": 0,
+        "total_batches": 0,
+        "total_streamed_tokens": 0,
+        "total_queue_wait_ms": 0.0,
+    }
+    _update_stats(redis_client, stats, published_stats)
 
     print(f"Worker ready on {device}")
     print(f"Checkpoint: {checkpoint_path}")
@@ -281,7 +297,7 @@ def main():
                 batch_timeout_ms=args.batch_timeout_ms,
             )
             if not batch:
-                _update_stats(redis_client, stats)
+                _update_stats(redis_client, stats, published_stats)
                 continue
 
             stats["total_requests"] += len(batch)
@@ -296,7 +312,7 @@ def main():
                 for req in batch:
                     _publish_error(redis_client, req["request_id"], str(exc))
 
-            _update_stats(redis_client, stats)
+            _update_stats(redis_client, stats, published_stats)
     except KeyboardInterrupt:
         pass
     finally:

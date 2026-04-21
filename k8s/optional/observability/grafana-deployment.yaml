@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tinygpt-grafana
+  namespace: tinygpt
+  labels:
+    app: tinygpt-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tinygpt-grafana
+  template:
+    metadata:
+      labels:
+        app: tinygpt-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.4
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+          volumeMounts:
+            - name: grafana-provisioning
+              mountPath: /etc/grafana/provisioning/datasources/datasource.yaml
+              subPath: datasource.yaml
+            - name: grafana-provisioning
+              mountPath: /etc/grafana/provisioning/dashboards/dashboard-provider.yaml
+              subPath: dashboard-provider.yaml
+            - name: grafana-dashboard
+              mountPath: /var/lib/grafana/dashboards/tinygpt-overview.json
+              subPath: tinygpt-overview.json
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+      volumes:
+        - name: grafana-provisioning
+          configMap:
+            name: tinygpt-grafana-provisioning
+        - name: grafana-dashboard
+          configMap:
+            name: tinygpt-grafana-dashboard

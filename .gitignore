@@ -18,6 +18,7 @@ data/
 .venv/
 venv/
 env/
+.tinygpt/
 
 .DS_Store
 *.swp

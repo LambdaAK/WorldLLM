@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tinygpt-prometheus
+  namespace: tinygpt
+spec:
+  selector:
+    app: tinygpt-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http

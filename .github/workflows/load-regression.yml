@@ -1,0 +1,115 @@
+name: TinyGPT Load Regression
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - app.py
+      - worker.py
+      - scripts/load_test.py
+      - scripts/check_regression.py
+      - scripts/build_ci_checkpoint.py
+      - benchmarks/**
+      - requirements.txt
+      - redis_protocol.py
+      - interact.py
+      - model.py
+      - vocabulary.py
+
+jobs:
+  load-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build CI checkpoint
+        run: |
+          mkdir -p artifacts
+          python scripts/build_ci_checkpoint.py \
+            --output artifacts/ci-checkpoint.pt
+
+      - name: Start worker and API
+        run: |
+          python worker.py \
+            --checkpoint artifacts/ci-checkpoint.pt \
+            --redis_url redis://127.0.0.1:6379/0 \
+            --device cpu \
+            --batch_timeout_ms 25 \
+            --max_batch_size 8 > artifacts/worker.log 2>&1 &
+          echo $! > artifacts/worker.pid
+
+          python app.py \
+            --checkpoint artifacts/ci-checkpoint.pt \
+            --host 127.0.0.1 \
+            --port 8000 \
+            --redis_url redis://127.0.0.1:6379/0 > artifacts/api.log 2>&1 &
+          echo $! > artifacts/api.pid
+
+      - name: Wait for API readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/info > artifacts/info.json; then
+              echo "API is ready"
+              cat artifacts/info.json
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "API failed to become ready" >&2
+          exit 1
+
+      - name: Run load test
+        run: |
+          python scripts/load_test.py \
+            --base-url http://127.0.0.1:8000 \
+            --users 10 \
+            --requests-per-user 8 \
+            --json-out artifacts/load_test_report.json
+
+      - name: Enforce regression thresholds
+        run: |
+          python scripts/check_regression.py \
+            --report artifacts/load_test_report.json \
+            --thresholds benchmarks/ci_thresholds.json
+
+      - name: Stop background processes
+        if: always()
+        run: |
+          if [ -f artifacts/api.pid ]; then
+            kill "$(cat artifacts/api.pid)" || true
+          fi
+          if [ -f artifacts/worker.pid ]; then
+            kill "$(cat artifacts/worker.pid)" || true
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinygpt-load-regression
+          path: artifacts
+          if-no-files-found: ignore
