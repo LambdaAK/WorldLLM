@@ -2,18 +2,19 @@
 
 A small decoder-only transformer trained from scratch to track object possession across multi-turn conversations. Given statements like "Alice has the ball" and "Alice gives the ball to Bob", it answers questions like "Who has the ball?" correctly.
 
-## Run Modes (Choose One)
+## Ways to Run the Project
 
-This project can be run in four different ways:
+This project has three serving modes:
 
-1. Train + CLI chat (`interact.py`): run the model directly in your terminal with no Redis or web server; best for quick model iteration.
-2. Local web serving stack (FastAPI + Redis + worker + PostgreSQL): run API, queue, worker, and database as separate local services.
-3. Docker Compose (API + Redis + worker + PostgreSQL containers): run the full serving stack with reproducible containerized setup.
-4. Kubernetes on Minikube (namespace + deployments + services + StatefulSet): run the full stack with orchestration, scaling, and persistent DB volume.
+1. Local web serving stack (FastAPI + Redis + worker + PostgreSQL): run API, queue, worker, and database as separate local services.
+2. Docker Compose (API + Redis + worker + PostgreSQL containers): run the full serving stack with reproducible containerized setup.
+3. Kubernetes on Minikube (namespace + deployments + services + StatefulSet): run the full stack with orchestration, scaling, and persistent DB volume.
+
+Training + CLI chat is separate and useful for model iteration, but it is not one of the three serving modes.
 
 ## One Command Launcher
 
-You can manage all serving modes with one command:
+You can manage all three serving modes with one command:
 
 ```bash
 cd /Users/alex/Desktop/TinyGPT
@@ -63,12 +64,12 @@ Notes:
 
 - Python 3.11
 - A trained checkpoint at `checkpoints/best.pt` for any inference mode (web/API/worker)
-- Redis (serving modes 2/3/4)
-- PostgreSQL (mode 2, unless using Docker/Kubernetes for modes 3/4)
-- Docker Desktop (for modes 3/4)
-- Minikube + kubectl (for mode 4)
+- Redis (serving modes 1/2/3)
+- PostgreSQL (required for local mode; Docker and Kubernetes include it)
+- Docker Desktop (for Docker and Kubernetes)
+- Minikube + kubectl (for Kubernetes)
 
-## 1) Train + CLI Chat (No Redis)
+## Model Training + CLI Chat (No Redis)
 
 ### Install dependencies
 
@@ -127,7 +128,7 @@ Optional cleanup (generated training data + checkpoints):
 rm -rf data checkpoints
 ```
 
-## 2) Local Web App (FastAPI + Redis + Worker + PostgreSQL)
+## 1) Local Web App (FastAPI + Redis + Worker + PostgreSQL)
 
 Run this when you want the browser UI (`/`) and streaming responses.
 
@@ -197,7 +198,7 @@ Optional: stop local PostgreSQL
 brew services stop postgresql@16
 ```
 
-## 3) Docker Compose
+## 2) Docker Compose
 
 This runs PostgreSQL, Redis, API, and worker together in containers.
 
@@ -231,7 +232,7 @@ Stop + remove volumes (clears Redis data in compose):
 docker compose down -v
 ```
 
-## 4) Kubernetes (Minikube)
+## 3) Kubernetes (Minikube)
 
 ### Start local cluster
 
